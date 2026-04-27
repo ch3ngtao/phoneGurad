@@ -56,6 +56,15 @@ yarn-error.log
 # Bundle artifact
 *.jsbundle
 
+# Claude
+.claude/
+
+# Patches
+patches/
+
+# Project structure doc
+PROJECT_STRUCTURE.md
+
 # Ruby / CocoaPods
 **/Pods/
 /vendor/bundle/
