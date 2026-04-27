@@ -38,12 +38,22 @@ class LocationService {
     const cleaned = phoneNumber.replace(/\D/g, '');
 
     if (cleaned.length < 7 || !cleaned.startsWith('1')) {
-      return { province: '未知', city: '未知', carrier: '未知', isKnown: false };
+      return {
+        province: '未知',
+        city: '未知',
+        carrier: '未知',
+        isKnown: false,
+      };
     }
 
     // iOS/other: return unknown (no native module)
     if (Platform.OS !== 'android') {
-      return { province: '未知', city: '未知', carrier: '未知', isKnown: false };
+      return {
+        province: '未知',
+        city: '未知',
+        carrier: '未知',
+        isKnown: false,
+      };
     }
 
     try {
@@ -56,7 +66,12 @@ class LocationService {
         isKnown: result.isKnown,
       };
     } catch {
-      return { province: '未知', city: '未知', carrier: '未知', isKnown: false };
+      return {
+        province: '未知',
+        city: '未知',
+        carrier: '未知',
+        isKnown: false,
+      };
     }
   }
 
