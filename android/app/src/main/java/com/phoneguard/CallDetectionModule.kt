@@ -39,7 +39,8 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) : R
         } else {
             ""
         },
-        Manifest.permission.CALL_PHONE
+        Manifest.permission.CALL_PHONE,
+        Manifest.permission.READ_CONTACTS,
     ).filter { it.isNotEmpty() }.toTypedArray()
 
     @ReactMethod
@@ -145,6 +146,7 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) : R
                     }
                 )
                 putBoolean("hasCallPhonePermission", hasPermission(Manifest.permission.CALL_PHONE))
+                putBoolean("hasContactsPermission", hasPermission(Manifest.permission.READ_CONTACTS))
             }
 
             val allGranted = REQUIRED_PERMISSIONS.all { hasPermission(it) }

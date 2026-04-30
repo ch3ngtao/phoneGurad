@@ -32,12 +32,13 @@ class LocationService {
 
   /**
    * 查询号码归属地
+   * 支持手机号（1开头）和座机号（0开头）
    * @param phoneNumber 电话号码
    */
   async queryLocation(phoneNumber: string): Promise<LocationInfo> {
     const cleaned = phoneNumber.replace(/\D/g, '');
 
-    if (cleaned.length < 7 || !cleaned.startsWith('1')) {
+    if (cleaned.length < 7) {
       return {
         province: '未知',
         city: '未知',
@@ -58,7 +59,6 @@ class LocationService {
 
     try {
       const result = await CallDetection.queryPhoneLocation(cleaned);
-      console.log(result, 'result');
       return {
         province: result.province,
         city: result.city,

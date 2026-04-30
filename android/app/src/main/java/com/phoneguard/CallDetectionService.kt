@@ -1,5 +1,6 @@
 package com.phoneguard
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,8 +10,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.database.Cursor
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.provider.ContactsContract
 import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
 import android.util.Log
@@ -109,6 +113,12 @@ class CallDetectionService : Service() {
             return
         }
 
+        // Contacts whitelist: never block
+        if (isNumberInContacts(phoneNumber)) {
+            Log.i(TAG, "Number in contacts, skipping: $phoneNumber")
+            return
+        }
+
         // Auto-block non-local numbers
         if (autoBlock && phoneLookupService != null) {
             val location = phoneLookupService!!.queryLocation(phoneNumber)
@@ -118,6 +128,48 @@ class CallDetectionService : Service() {
                 return
             }
         }
+    }
+
+    /**
+     * Check if the phone number exists in contacts.
+     * Matches by last 10 digits to handle different formatting (+86, 0 prefix, etc).
+     */
+    private fun isNumberInContacts(phoneNumber: String): Boolean {
+        if (!hasPermission(Manifest.permission.READ_CONTACTS)) {
+            return false
+        }
+
+        try {
+            val cleaned = phoneNumber.replace(Regex("[^0-9]"), "")
+            if (cleaned.length < 7) return false
+
+            // Take last 10 digits for matching (handles +86 prefix differences)
+            val suffix = cleaned.takeLast(10)
+
+            // Query all contacts and match by suffix
+            val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
+            val cursor: Cursor? = contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                null, null, null
+            )
+            cursor?.use {
+                while (it.moveToNext()) {
+                    val stored = it.getString(0)?.replace(Regex("[^0-9]"), "") ?: continue
+                    if (stored.length >= 10 && stored.takeLast(10) == suffix) {
+                        return true
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking contacts", e)
+        }
+        return false
+    }
+
+    private fun hasPermission(permission: String): Boolean {
+        return android.content.pm.PackageManager.PERMISSION_GRANTED ==
+            checkSelfPermission(permission)
     }
 
     /**

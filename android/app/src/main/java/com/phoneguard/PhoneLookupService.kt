@@ -1,6 +1,7 @@
 package com.phoneguard
 
 import android.content.res.AssetManager
+import org.json.JSONObject
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -9,24 +10,8 @@ import java.util.zip.CRC32
 /**
  * Phone number location lookup service.
  *
- * Reads phone2region.db from Android assets and performs binary search
- * to look up province, city, carrier for Chinese phone numbers.
- *
- * Database format (phone2region v2):
- * - 4 bytes: CRC32 checksum (signed int32)
- * - 4 bytes: version number
- * - 4 bytes: CRC32 of data from byte 12 onward (signed int32)
- * - 4 bytes: vector2AreaPtr (second-level index pointer)
- * - 4 bytes: vectorAreaPtr (index section pointer)
- * - Data: text records and 5-byte index entries
- *
- * Index entry format (5 bytes):
- * - 1 byte: last digit of (phone_prefix - 1300000)
- * - 4 bytes: record pointer (LE uint32)
- *
- * Record format:
- * - 1 byte: text length
- * - N bytes: UTF-8 text "province|city|zip|area|carrier"
+ * Reads phone2region.db and landline_area_codes.json from Android assets.
+ * Supports both mobile (11-digit) and landline (area code + local number) lookups.
  */
 class PhoneLookupService(assets: AssetManager) {
 
@@ -41,13 +26,17 @@ class PhoneLookupService(assets: AssetManager) {
         }
     }
 
+    private data class LandlineInfo(val province: String, val city: String)
+
     private lateinit var buffer: ByteArray
     private var vector2AreaPtr: Int = 0
     private var vectorAreaPtr: Int = 0
     private var initialized: Boolean = false
+    private val landlineCodes = mutableMapOf<String, LandlineInfo>()
 
     init {
         loadDatabase(assets)
+        loadLandlineCodes(assets)
     }
 
     private fun loadDatabase(assets: AssetManager) {
@@ -78,26 +67,80 @@ class PhoneLookupService(assets: AssetManager) {
         }
     }
 
+    private fun loadLandlineCodes(assets: AssetManager) {
+        try {
+            val inputStream = assets.open("landline_area_codes.json")
+            val json = inputStream.bufferedReader().use { it.readText() }
+            inputStream.close()
+
+            val root = JSONObject(json)
+            for (areaCode in root.keys()) {
+                val obj = root.getJSONObject(areaCode)
+                val province = obj.getString("province")
+                val city = obj.getString("city")
+                landlineCodes[areaCode] = LandlineInfo(province, city)
+            }
+
+            android.util.Log.i(TAG, "Loaded ${landlineCodes.size} landline area codes")
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to load landline_area_codes.json", e)
+        }
+    }
+
     /**
      * Query phone number location.
-     * @param phone Full 11-digit phone number or at least first 7 digits
+     * Supports both mobile numbers (starting with 1) and landline numbers (starting with 0).
+     * @param phone Full phone number (11-digit mobile or area code + local number)
      * @return LocationResult with province, city, carrier
      */
     fun queryLocation(phone: String): LocationResult {
         if (!initialized) return LocationResult.UNKNOWN
 
-        // Extract first 7 digits
         val cleaned = phone.replace("\\D".toRegex(), "")
-        if (cleaned.length < 7 || !cleaned.startsWith("1")) {
+        if (cleaned.length < 7) {
             return LocationResult.UNKNOWN
         }
 
-        val prefix = cleaned.substring(0, 7).toIntOrNull() ?: return LocationResult.UNKNOWN
-        if (prefix < 1300000 || prefix > 1999999) {
-            return LocationResult.UNKNOWN
+        // Landline: starts with 0
+        if (cleaned.startsWith("0")) {
+            return queryLandlineLocation(cleaned)
         }
 
-        return innerQuery(prefix - 1300000)
+        // Mobile: starts with 1, prefix 1300000-1999999
+        if (cleaned.startsWith("1")) {
+            val prefix = cleaned.substring(0, 7).toIntOrNull() ?: return LocationResult.UNKNOWN
+            if (prefix in 1300000..1999999) {
+                return innerQuery(prefix - 1300000)
+            }
+        }
+
+        return LocationResult.UNKNOWN
+    }
+
+    /**
+     * Query landline number location by area code.
+     * Tries 4-digit area code first, then 3-digit.
+     */
+    private fun queryLandlineLocation(phone: String): LocationResult {
+        if (landlineCodes.isEmpty()) return LocationResult.UNKNOWN
+
+        // Try 4-digit area code first (e.g., 0755 Shenzhen)
+        if (phone.length >= 4) {
+            val areaCode4 = phone.substring(0, 4)
+            landlineCodes[areaCode4]?.let {
+                return LocationResult(it.province, it.city, "固话", true)
+            }
+        }
+
+        // Try 3-digit area code (e.g., 010 Beijing, 021 Shanghai)
+        if (phone.length >= 3) {
+            val areaCode3 = phone.substring(0, 3)
+            landlineCodes[areaCode3]?.let {
+                return LocationResult(it.province, it.city, "固话", true)
+            }
+        }
+
+        return LocationResult.UNKNOWN
     }
 
     /**
