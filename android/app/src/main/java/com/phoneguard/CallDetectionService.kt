@@ -18,8 +18,8 @@ import java.util.concurrent.Executors
  * 常驻通知，让老人能看到防护还在，也让进程尽量不被系统立刻杀掉。
  *
  * 真正在进程被杀之后仍能拦截的是 [PhoneGuardCallScreeningService]。
- * 这里的电话状态广播只是进程还活着时的备用。Android 10 起，非默认电话应用
- * 经常拿不到号码，也不能可靠挂断，所以不能只靠它。
+ * 这里的电话状态广播只在没有来电过滤角色时备用挂断。角色已经在拒接时再
+ * endCall，会把同一通来电再记一条未接。
  *
  * 类型用 specialUse，不用 dataSync。dataSync 在 Android 15 上最长大约只能跑数小时，
  * 而且 Android 15 起不允许从开机广播拉起。
@@ -30,6 +30,8 @@ class CallDetectionService : Service() {
     }
 
     private var receiverRegistered = false
+    private var lastEndedKey = ""
+    private var lastEndedAt = 0L
 
     private val phoneStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -93,6 +95,18 @@ class CallDetectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun handleIncomingCall(number: String) {
+        if (!CallGuardPolicy.shouldEndCallFromPhoneState(GuardCapabilities.screeningRoleHeld(this))) {
+            Log.i(TAG, "screening already handling ${CallGuardPolicy.redact(number)}, skip endCall")
+            return
+        }
+        val key = CallGuardPolicy.normalizeNumber(number)
+        val now = System.currentTimeMillis()
+        synchronized(this) {
+            if (key.isNotEmpty() && key == lastEndedKey && now - lastEndedAt < DUPLICATE_WINDOW_MS) {
+                Log.i(TAG, "duplicate ringing ${CallGuardPolicy.redact(number)}, skip endCall")
+                return
+            }
+        }
         val block = try {
             IncomingCallGuard.shouldBlock(this, number)
         } catch (error: Exception) {
@@ -101,6 +115,10 @@ class CallDetectionService : Service() {
         }
         if (!block) return
         if (endCall()) {
+            synchronized(this) {
+                lastEndedKey = key
+                lastEndedAt = System.currentTimeMillis()
+            }
             IncomingCallGuard.onBlocked(this, number)
         } else {
             Log.w(TAG, "endCall failed for ${CallGuardPolicy.redact(number)}")
@@ -188,6 +206,7 @@ class CallDetectionService : Service() {
 
     companion object {
         private const val TAG = "PhoneGuard"
+        private const val DUPLICATE_WINDOW_MS = 15_000L
         const val ACTION_STOP = "com.phoneguard.ACTION_STOP"
         const val ACTION_REFRESH = "com.phoneguard.ACTION_REFRESH"
 

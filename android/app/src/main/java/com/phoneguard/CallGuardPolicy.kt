@@ -70,6 +70,14 @@ object CallGuardPolicy {
         return digits
     }
 
+    /**
+     * 来电过滤角色已经在拒接时，电话状态监听不能再 endCall。
+     * 两条路径都会往系统通话记录里各写一条，未接计数就会 +2。
+     */
+    fun shouldEndCallFromPhoneState(screeningRoleHeld: Boolean): Boolean {
+        return !screeningRoleHeld
+    }
+
     fun redact(raw: String): String {
         val digits = normalizeNumber(raw)
         if (digits.length <= 4) return "尾号不明"

@@ -81,6 +81,12 @@ class CallGuardPolicyTest {
     }
 
     @Test
+    fun doesNotEndCallAgainWhenScreeningRoleIsHeld() {
+        assertFalse(CallGuardPolicy.shouldEndCallFromPhoneState(screeningRoleHeld = true))
+        assertTrue(CallGuardPolicy.shouldEndCallFromPhoneState(screeningRoleHeld = false))
+    }
+
+    @Test
     fun matchesNumbersAcrossFormats() {
         assertTrue(CallGuardPolicy.matchesList(setOf("+86 138-0013-8000"), "13800138000"))
         assertFalse(CallGuardPolicy.matchesList(setOf("13900139000"), "13800138000"))

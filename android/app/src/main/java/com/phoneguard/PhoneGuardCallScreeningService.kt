@@ -7,7 +7,8 @@ import android.util.Log
 
 /**
  * 系统在来电时绑定此服务，即使界面已退出、进程刚被杀掉也会拉起。
- * 必须在几秒内 respondToCall。失败时放行，避免误伤亲友。
+ * 每次 onScreenCall 只 respondToCall 一次。挂断只走这里，不再调用 Telecom.endCall。
+ * 失败时放行，避免误伤亲友。
  */
 class PhoneGuardCallScreeningService : CallScreeningService() {
     override fun onScreenCall(callDetails: Call.Details) {
@@ -46,6 +47,8 @@ class PhoneGuardCallScreeningService : CallScreeningService() {
     }
 
     private fun reject(): CallResponse {
+        // 只在这里拒接一次。CallDetectionService 在已有来电过滤角色时不能再 endCall，
+        // 否则系统会把同一通来电再记一条未接。第三方的 setSkipCallLog 会被系统忽略。
         return CallResponse.Builder()
             .setDisallowCall(true)
             .setRejectCall(true)
