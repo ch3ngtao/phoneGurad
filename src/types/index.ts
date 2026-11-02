@@ -36,6 +36,7 @@ export interface AppSettings {
   enableLog: boolean;
   whitelist: string[];
   blacklist: string[];
+  localProvince: string;
 }
 
 // 原生电话模块事件

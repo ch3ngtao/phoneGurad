@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS: {
   enableLog: boolean;
   whitelist: string[];
   blacklist: string[];
+  localProvince: string;
 } = {
   autoBlock: true,
   blockThreshold: SPAM_THRESHOLD.HIGH,
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: {
   enableLog: true,
   whitelist: [],
   blacklist: [],
+  localProvince: '',
 };
 
 // 存储键名

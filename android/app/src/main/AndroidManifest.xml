@@ -2,16 +2,19 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- 前台服务权限 -->
+    <!-- 前台服务：specialUse 用于长期防护通知。dataSync 在 Android 15 上会被限时停掉。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- 电话相关权限 -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
-    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <!-- 通讯录权限（用于白名单放行） -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <!-- 通知权限 (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -21,8 +24,16 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- 通讯录权限（用于白名单放行） -->
-    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <queries>
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.oneplus.security" />
+    </queries>
 
     <application
       android:name=".MainApplication"
@@ -46,11 +57,34 @@
         </intent-filter>
       </activity>
 
-      <!-- 来电检测前台服务 -->
+      <!-- 常驻通知。拦截本身靠下面的来电筛选，不依赖界面停在前台。 -->
       <service
         android:name=".CallDetectionService"
         android:enabled="true"
         android:exported="false"
-        android:foregroundServiceType="dataSync" />
+        android:stopWithTask="false"
+        android:foregroundServiceType="specialUse">
+        <property
+          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+          android:value="持续显示防护状态，并在进程还在时备用监听来电。外地陌生来电的拦截由系统来电筛选完成。" />
+      </service>
+
+      <service
+        android:name=".PhoneGuardCallScreeningService"
+        android:permission="android.permission.BIND_SCREENING_SERVICE"
+        android:exported="true">
+        <intent-filter>
+          <action android:name="android.telecom.CallScreeningService" />
+        </intent-filter>
+      </service>
+
+      <receiver
+        android:name=".GuardBootReceiver"
+        android:exported="true">
+        <intent-filter>
+          <action android:name="android.intent.action.BOOT_COMPLETED" />
+          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+        </intent-filter>
+      </receiver>
     </application>
 </manifest>
