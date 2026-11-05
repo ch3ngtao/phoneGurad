@@ -173,6 +173,38 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun saveUserState(
+        localProvince: String,
+        autoBlock: Boolean,
+        protectionEnabled: Boolean,
+        enableNotification: Boolean,
+        enableLog: Boolean,
+        batteryPromptDismissed: Boolean,
+        autostartOpened: Boolean,
+        whitelist: ReadableArray,
+        blacklist: ReadableArray,
+        promise: Promise,
+    ) {
+        try {
+            CallGuardStore.saveUserState(
+                reactContext,
+                localProvince,
+                autoBlock,
+                protectionEnabled,
+                enableNotification,
+                enableLog,
+                batteryPromptDismissed,
+                autostartOpened,
+                whitelist.toStringList(),
+                blacklist.toStringList(),
+            )
+            promise.resolve(true)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
+        }
+    }
+
+    @ReactMethod
     fun getProtectionStatus(promise: Promise) {
         try {
             val settings = CallGuardStore.read(reactContext)
@@ -187,6 +219,17 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) :
                 putBoolean("phonePermissionGranted", GuardCapabilities.phonePermissionGranted(reactContext))
                 putString("localProvince", settings.localProvince)
                 putBoolean("autoBlock", settings.autoBlock)
+                putArray("whitelist", stringArray(settings.whitelist))
+                putArray("blacklist", stringArray(settings.blacklist))
+                putBoolean("enableNotification", settings.enableNotification)
+                putBoolean("enableLog", settings.enableLog)
+                putBoolean("batteryPromptDismissed", settings.batteryPromptDismissed)
+                putBoolean("autostartOpened", settings.autostartOpened)
+                putBoolean("hasPersistedProvince", settings.hasPersistedProvince)
+                putBoolean("hasPersistedLists", settings.hasPersistedLists)
+                putBoolean("hasPersistedAutoBlock", settings.hasPersistedAutoBlock)
+                putBoolean("hasPersistedProtection", settings.hasPersistedProtection)
+                putBoolean("hasPersistedGuidance", settings.hasPersistedGuidance)
                 putInt("blockedCount", settings.blockedCount)
                 putString("lastBlockedNumber", settings.lastBlockedNumber)
                 putDouble("lastBlockedAt", settings.lastBlockedAt.toDouble())
@@ -305,6 +348,12 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) :
 
     private fun hasPermission(permission: String): Boolean {
         return ContextCompat.checkSelfPermission(reactContext, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun stringArray(values: Collection<String>): com.facebook.react.bridge.WritableArray {
+        val array = Arguments.createArray()
+        values.forEach { array.pushString(it) }
+        return array
     }
 
     private fun ReadableArray.toStringList(): List<String> {

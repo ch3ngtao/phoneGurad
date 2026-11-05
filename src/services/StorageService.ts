@@ -27,7 +27,7 @@ class StorageService {
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (!data) {
-        return this.cloneSettings(DEFAULT_SETTINGS);
+        return null;
       }
       const parsed = JSON.parse(data);
       return this.cloneSettings({
@@ -37,6 +37,9 @@ class StorageService {
           typeof parsed.localProvince === 'string' ? parsed.localProvince : '',
         whitelist: Array.isArray(parsed.whitelist) ? parsed.whitelist : [],
         blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : [],
+        protectionEnabled: parsed.protectionEnabled === true,
+        batteryPromptDismissed: parsed.batteryPromptDismissed === true,
+        autostartOpened: parsed.autostartOpened === true,
       });
     } catch (error) {
       console.error('[StorageService] Error getting settings:', error);

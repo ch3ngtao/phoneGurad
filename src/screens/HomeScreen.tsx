@@ -18,6 +18,7 @@ import CallDetection, {
 import PhoneService from '../services/PhoneService';
 import StorageService from '../services/StorageService';
 import { describeProtection } from '../services/protectionCopy';
+import { restoreUserState } from '../services/userState';
 import { AppSettings } from '../types';
 
 const PROVINCES = [
@@ -63,54 +64,114 @@ const HomeScreen: React.FC = () => {
   const [provinceInput, setProvinceInput] = useState('');
   const [busy, setBusy] = useState(false);
   const inputReady = useRef(false);
+  const persistGeneration = useRef(0);
+
+  const persist = useCallback(async (nextSettings: AppSettings) => {
+    const generation = persistGeneration.current + 1;
+    persistGeneration.current = generation;
+    setSettings(nextSettings);
+    if (nextSettings.localProvince.trim()) {
+      PhoneService.setLocalLocation(nextSettings.localProvince.trim());
+    }
+    await CallDetection.saveUserState({
+      localProvince: nextSettings.localProvince,
+      autoBlock: nextSettings.autoBlock,
+      protectionEnabled: nextSettings.protectionEnabled,
+      enableNotification: nextSettings.enableNotification,
+      enableLog: nextSettings.enableLog,
+      batteryPromptDismissed: nextSettings.batteryPromptDismissed,
+      autostartOpened: nextSettings.autostartOpened,
+      whitelist: nextSettings.whitelist ?? [],
+      blacklist: nextSettings.blacklist ?? [],
+    });
+    if (generation !== persistGeneration.current) return;
+    await StorageService.saveSettings(nextSettings);
+  }, []);
 
   const refresh = useCallback(async () => {
-    const saved = await StorageService.readSettings();
-    if (!saved) {
-      setSettings({ ...DEFAULT_SETTINGS });
-      const fallback = await CallDetection.getProtectionStatus();
-      setStatus(fallback);
+    const stamp = persistGeneration.current;
+    let nativeStatus = EMPTY_PROTECTION_STATUS;
+    let nativeOk = false;
+    try {
+      nativeStatus = await CallDetection.getProtectionStatus();
+      nativeOk = true;
+    } catch (error) {
+      console.warn('[HomeScreen] read native state failed', error);
+    }
+
+    const stored = await StorageService.readSettings();
+    if (!nativeOk) {
+      if (stored) {
+        setSettings(stored);
+        if (stored.localProvince.trim()) {
+          PhoneService.setLocalLocation(stored.localProvince.trim());
+        }
+        if (!inputReady.current) {
+          setProvinceInput(stored.localProvince);
+          inputReady.current = true;
+        }
+      } else {
+        setSettings(current => current ?? { ...DEFAULT_SETTINGS, whitelist: [], blacklist: [] });
+      }
       return;
     }
 
-    let province = saved.localProvince.trim();
-    let nextStatus = await CallDetection.getProtectionStatus();
-    if (!province && nextStatus.localProvince.trim()) {
-      province = nextStatus.localProvince.trim();
-      saved.localProvince = province;
-      await StorageService.saveSettings(saved);
+    const restored = restoreUserState(nativeStatus, stored);
+    if (stamp !== persistGeneration.current) return;
+    if (restored.needsNativeRepair) {
+      await CallDetection.saveUserState({
+        localProvince: restored.settings.localProvince,
+        autoBlock: restored.settings.autoBlock,
+        protectionEnabled: restored.settings.protectionEnabled,
+        enableNotification: restored.settings.enableNotification,
+        enableLog: restored.settings.enableLog,
+        batteryPromptDismissed: restored.settings.batteryPromptDismissed,
+        autostartOpened: restored.settings.autostartOpened,
+        whitelist: restored.settings.whitelist,
+        blacklist: restored.settings.blacklist,
+      });
+    }
+    if (stamp !== persistGeneration.current) return;
+    if (restored.needsAsyncRepair) {
+      await StorageService.saveSettings(restored.settings);
+    }
+    if (stamp !== persistGeneration.current) return;
+    if (restored.settings.localProvince.trim()) {
+      PhoneService.setLocalLocation(restored.settings.localProvince.trim());
+    }
+    if (!inputReady.current) {
+      setProvinceInput(restored.settings.localProvince);
+      inputReady.current = true;
     }
 
-    await CallDetection.syncSettings({
-      localProvince: province,
-      autoBlock: saved.autoBlock,
-      whitelist: saved.whitelist ?? [],
-      blacklist: saved.blacklist ?? [],
-    });
-
-    if (nextStatus.protectionEnabled && !nextStatus.serviceRunning) {
+    let nextStatus = nativeStatus;
+    if (restored.settings.protectionEnabled && !nativeStatus.serviceRunning) {
       try {
         await CallDetection.startListening();
       } catch (error) {
         console.warn('[HomeScreen] restart guard failed', error);
       }
+      nextStatus = await CallDetection.getProtectionStatus();
     }
-    nextStatus = await CallDetection.getProtectionStatus();
 
-    if (province) {
-      PhoneService.setLocalLocation(province);
-    }
-    if (!inputReady.current) {
-      setProvinceInput(province);
-      inputReady.current = true;
-    }
-    setSettings({ ...saved, localProvince: province });
-    setStatus(nextStatus);
+    setSettings(restored.settings);
+    setStatus({
+      ...nextStatus,
+      protectionEnabled: restored.settings.protectionEnabled,
+      localProvince: restored.settings.localProvince,
+      autoBlock: restored.settings.autoBlock,
+      whitelist: restored.settings.whitelist,
+      blacklist: restored.settings.blacklist,
+      enableNotification: restored.settings.enableNotification,
+      enableLog: restored.settings.enableLog,
+      batteryPromptDismissed: restored.settings.batteryPromptDismissed,
+      autostartOpened: restored.settings.autostartOpened,
+    });
   }, []);
 
   useEffect(() => {
     refresh().catch(() => {
-      setSettings({ ...DEFAULT_SETTINGS });
+      setSettings(current => current ?? { ...DEFAULT_SETTINGS, whitelist: [], blacklist: [] });
     });
     const appState = AppState.addEventListener('change', state => {
       if (state === 'active') {
@@ -136,17 +197,9 @@ const HomeScreen: React.FC = () => {
       ...(settings ?? DEFAULT_SETTINGS),
       localProvince: trimmed,
     };
-    setSettings(nextSettings);
     setProvinceInput(trimmed);
     inputReady.current = true;
-    PhoneService.setLocalLocation(trimmed);
-    await StorageService.saveSettings(nextSettings);
-    await CallDetection.syncSettings({
-      localProvince: trimmed,
-      autoBlock: nextSettings.autoBlock,
-      whitelist: nextSettings.whitelist ?? [],
-      blacklist: nextSettings.blacklist ?? [],
-    });
+    await persist(nextSettings);
     if (announce) {
       Alert.alert('已记住', `家乡是${trimmed}。本地电话会打进来。`);
     }
@@ -174,9 +227,21 @@ const HomeScreen: React.FC = () => {
         );
         return;
       }
-      if (!nextStatus.batteryUnrestricted) {
+      const remembered = settings ?? { ...DEFAULT_SETTINGS, whitelist: [], blacklist: [] };
+      if (!nextStatus.batteryUnrestricted && !remembered.batteryPromptDismissed) {
         Alert.alert('请允许后台运行', '接下来请点允许。这是为了让手机不要把防护关掉。', [
-          { text: '稍后', style: 'cancel' },
+          {
+            text: '稍后',
+            style: 'cancel',
+            onPress: () => {
+              persist({
+                ...remembered,
+                localProvince: province,
+                protectionEnabled: true,
+                batteryPromptDismissed: true,
+              }).catch(() => undefined);
+            },
+          },
           {
             text: '去允许',
             onPress: () => {
@@ -215,14 +280,7 @@ const HomeScreen: React.FC = () => {
   const updateAutoBlock = async (value: boolean) => {
     if (!settings) return;
     const nextSettings = { ...settings, autoBlock: value };
-    setSettings(nextSettings);
-    await StorageService.saveSettings(nextSettings);
-    await CallDetection.syncSettings({
-      localProvince: nextSettings.localProvince,
-      autoBlock: value,
-      whitelist: nextSettings.whitelist ?? [],
-      blacklist: nextSettings.blacklist ?? [],
-    });
+    await persist(nextSettings);
     await refresh();
   };
 
@@ -239,6 +297,7 @@ const HomeScreen: React.FC = () => {
   };
 
   const openAutoStart = () => {
+    if (!settings) return;
     Alert.alert(
       '允许自启动',
       '如果看到自启动、后台活动或耗电管理，请允许「异地禁呼」。允许后，手机更不容易把防护关掉。',
@@ -247,6 +306,7 @@ const HomeScreen: React.FC = () => {
         {
           text: '去设置',
           onPress: () => {
+            persist({ ...settings, autostartOpened: true }).catch(() => undefined);
             CallDetection.openAutoStartSettings().catch(() => undefined);
           },
         },
@@ -311,6 +371,25 @@ const HomeScreen: React.FC = () => {
       <TouchableOpacity style={styles.secondaryButton} onPress={openAutoStart} accessibilityRole="button">
         <Text style={styles.secondaryButtonText}>允许自启动</Text>
       </TouchableOpacity>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>上次记住的</Text>
+        <Text style={styles.sectionBody}>
+          家乡：{settings.localProvince.trim() || '还没填写'}。防护：
+          {settings.protectionEnabled ? '开着' : '关着'}。
+        </Text>
+        <Text style={styles.sectionBody}>
+          {settings.whitelist.length > 0
+            ? `额外放行 ${settings.whitelist.length} 个号码：${settings.whitelist.slice(0, 20).join('、')}`
+            : '通讯录里的人一直会打进来。'}
+        </Text>
+        {settings.batteryPromptDismissed ? (
+          <Text style={styles.sectionBody}>你选择了稍后允许后台运行。</Text>
+        ) : null}
+        {settings.autostartOpened ? (
+          <Text style={styles.sectionBody}>已经去过自启动设置。</Text>
+        ) : null}
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>您的家乡</Text>

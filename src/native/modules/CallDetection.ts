@@ -43,6 +43,17 @@ export type ProtectionStatus = {
   phonePermissionGranted: boolean;
   localProvince: string;
   autoBlock: boolean;
+  whitelist: string[];
+  blacklist: string[];
+  enableNotification: boolean;
+  enableLog: boolean;
+  batteryPromptDismissed: boolean;
+  autostartOpened: boolean;
+  hasPersistedProvince: boolean;
+  hasPersistedLists: boolean;
+  hasPersistedAutoBlock: boolean;
+  hasPersistedProtection: boolean;
+  hasPersistedGuidance: boolean;
   blockedCount: number;
   lastBlockedNumber: string;
   lastBlockedAt: number;
@@ -61,6 +72,17 @@ export const EMPTY_PROTECTION_STATUS: ProtectionStatus = {
   phonePermissionGranted: false,
   localProvince: '',
   autoBlock: true,
+  whitelist: [],
+  blacklist: [],
+  enableNotification: true,
+  enableLog: true,
+  batteryPromptDismissed: false,
+  autostartOpened: false,
+  hasPersistedProvince: false,
+  hasPersistedLists: false,
+  hasPersistedAutoBlock: false,
+  hasPersistedProtection: false,
+  hasPersistedGuidance: false,
   blockedCount: 0,
   lastBlockedNumber: '',
   lastBlockedAt: 0,
@@ -128,6 +150,31 @@ class CallDetection {
     return CallDetectionModule.queryPhoneLocation(phoneNumber);
   }
 
+  async saveUserState(params: {
+    localProvince: string;
+    autoBlock: boolean;
+    protectionEnabled: boolean;
+    enableNotification: boolean;
+    enableLog: boolean;
+    batteryPromptDismissed: boolean;
+    autostartOpened: boolean;
+    whitelist: string[];
+    blacklist: string[];
+  }): Promise<void> {
+    if (!this.isAndroidModule()) return;
+    await CallDetectionModule.saveUserState(
+      params.localProvince,
+      params.autoBlock,
+      params.protectionEnabled,
+      params.enableNotification,
+      params.enableLog,
+      params.batteryPromptDismissed,
+      params.autostartOpened,
+      params.whitelist,
+      params.blacklist,
+    );
+  }
+
   async syncSettings(params: {
     localProvince: string;
     autoBlock: boolean;
@@ -145,7 +192,13 @@ class CallDetection {
 
   async getProtectionStatus(): Promise<ProtectionStatus> {
     if (!this.isAndroidModule()) return EMPTY_PROTECTION_STATUS;
-    return CallDetectionModule.getProtectionStatus();
+    const raw = await CallDetectionModule.getProtectionStatus();
+    return {
+      ...EMPTY_PROTECTION_STATUS,
+      ...raw,
+      whitelist: Array.isArray(raw?.whitelist) ? raw.whitelist : [],
+      blacklist: Array.isArray(raw?.blacklist) ? raw.blacklist : [],
+    };
   }
 
   async ensureScreeningRole(): Promise<boolean> {

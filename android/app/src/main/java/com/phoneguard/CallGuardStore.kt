@@ -22,6 +22,11 @@ object CallGuardStore {
     private const val KEY_LAST_BLOCKED_NUMBER = "last_blocked_number"
     private const val KEY_LAST_BLOCKED_AT = "last_blocked_at"
     private const val KEY_LAST_SERVICE_ERROR = "last_service_error"
+    private const val KEY_ENABLE_NOTIFICATION = "enable_notification"
+    private const val KEY_ENABLE_LOG = "enable_log"
+    private const val KEY_BATTERY_DISMISSED = "battery_prompt_dismissed"
+    private const val KEY_AUTOSTART_OPENED = "autostart_opened"
+    private const val KEY_USER_STATE_SAVED = "user_state_saved"
 
     data class Settings(
         val localProvince: String,
@@ -33,12 +38,22 @@ object CallGuardStore {
         val lastBlockedNumber: String,
         val lastBlockedAt: Long,
         val lastServiceError: String,
+        val enableNotification: Boolean,
+        val enableLog: Boolean,
+        val batteryPromptDismissed: Boolean,
+        val autostartOpened: Boolean,
+        val hasPersistedProvince: Boolean,
+        val hasPersistedLists: Boolean,
+        val hasPersistedAutoBlock: Boolean,
+        val hasPersistedProtection: Boolean,
+        val hasPersistedGuidance: Boolean,
     )
 
     fun read(context: Context): Settings {
         val prefs = prefs(context)
+        val province = prefs.getString(KEY_LOCAL_PROVINCE, "") ?: ""
         return Settings(
-            localProvince = prefs.getString(KEY_LOCAL_PROVINCE, "") ?: "",
+            localProvince = province,
             autoBlock = prefs.getBoolean(KEY_AUTO_BLOCK, true),
             protectionEnabled = prefs.getBoolean(KEY_PROTECTION_ENABLED, false),
             whitelist = readNumbers(prefs, KEY_WHITELIST_JSON, KEY_LEGACY_WHITELIST),
@@ -47,6 +62,15 @@ object CallGuardStore {
             lastBlockedNumber = prefs.getString(KEY_LAST_BLOCKED_NUMBER, "") ?: "",
             lastBlockedAt = prefs.getLong(KEY_LAST_BLOCKED_AT, 0L),
             lastServiceError = prefs.getString(KEY_LAST_SERVICE_ERROR, "") ?: "",
+            enableNotification = prefs.getBoolean(KEY_ENABLE_NOTIFICATION, true),
+            enableLog = prefs.getBoolean(KEY_ENABLE_LOG, true),
+            batteryPromptDismissed = prefs.getBoolean(KEY_BATTERY_DISMISSED, false),
+            autostartOpened = prefs.getBoolean(KEY_AUTOSTART_OPENED, false),
+            hasPersistedProvince = prefs.contains(KEY_LOCAL_PROVINCE) && province.isNotBlank(),
+            hasPersistedLists = prefs.contains(KEY_WHITELIST_JSON) || prefs.contains(KEY_LEGACY_WHITELIST),
+            hasPersistedAutoBlock = prefs.contains(KEY_AUTO_BLOCK),
+            hasPersistedProtection = prefs.contains(KEY_PROTECTION_ENABLED),
+            hasPersistedGuidance = prefs.contains(KEY_USER_STATE_SAVED),
         )
     }
 
@@ -69,12 +93,55 @@ object CallGuardStore {
         whitelist: List<String>,
         blacklist: List<String>,
     ) {
+        val current = prefs(context)
+        val editor = current.edit()
+        val province = localProvince.trim()
+        if (province.isNotEmpty()) {
+            editor.putString(KEY_LOCAL_PROVINCE, province)
+        }
+        if (!autoBlock || !current.contains(KEY_AUTO_BLOCK)) {
+            editor.putBoolean(KEY_AUTO_BLOCK, autoBlock)
+        }
+        if (whitelist.isNotEmpty() || readNumbers(current, KEY_WHITELIST_JSON, KEY_LEGACY_WHITELIST).isEmpty()) {
+            editor.putString(KEY_WHITELIST_JSON, encode(whitelist))
+            editor.remove(KEY_LEGACY_WHITELIST)
+        }
+        if (blacklist.isNotEmpty() || readNumbers(current, KEY_BLACKLIST_JSON, KEY_LEGACY_BLACKLIST).isEmpty()) {
+            editor.putString(KEY_BLACKLIST_JSON, encode(blacklist))
+            editor.remove(KEY_LEGACY_BLACKLIST)
+        }
+        editor.commit()
+        CallDetectionService.refreshIfRunning(context)
+    }
+
+    /**
+     * 用户能感知的状态写在这里，并 commit。
+     * 空家乡不会盖掉已经记住的家乡。
+     */
+    fun saveUserState(
+        context: Context,
+        localProvince: String,
+        autoBlock: Boolean,
+        protectionEnabled: Boolean,
+        enableNotification: Boolean,
+        enableLog: Boolean,
+        batteryPromptDismissed: Boolean,
+        autostartOpened: Boolean,
+        whitelist: List<String>,
+        blacklist: List<String>,
+    ) {
         val editor = prefs(context).edit()
         val province = localProvince.trim()
         if (province.isNotEmpty()) {
             editor.putString(KEY_LOCAL_PROVINCE, province)
         }
         editor.putBoolean(KEY_AUTO_BLOCK, autoBlock)
+        editor.putBoolean(KEY_PROTECTION_ENABLED, protectionEnabled)
+        editor.putBoolean(KEY_ENABLE_NOTIFICATION, enableNotification)
+        editor.putBoolean(KEY_ENABLE_LOG, enableLog)
+        editor.putBoolean(KEY_BATTERY_DISMISSED, batteryPromptDismissed)
+        editor.putBoolean(KEY_AUTOSTART_OPENED, autostartOpened)
+        editor.putBoolean(KEY_USER_STATE_SAVED, true)
         editor.putString(KEY_WHITELIST_JSON, encode(whitelist))
         editor.putString(KEY_BLACKLIST_JSON, encode(blacklist))
         editor.remove(KEY_LEGACY_WHITELIST)

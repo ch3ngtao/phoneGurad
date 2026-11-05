@@ -23,6 +23,9 @@ export const DEFAULT_SETTINGS: {
   whitelist: string[];
   blacklist: string[];
   localProvince: string;
+  protectionEnabled: boolean;
+  batteryPromptDismissed: boolean;
+  autostartOpened: boolean;
 } = {
   autoBlock: true,
   blockThreshold: SPAM_THRESHOLD.HIGH,
@@ -31,6 +34,9 @@ export const DEFAULT_SETTINGS: {
   whitelist: [],
   blacklist: [],
   localProvince: '',
+  protectionEnabled: false,
+  batteryPromptDismissed: false,
+  autostartOpened: false,
 };
 
 // 存储键名
