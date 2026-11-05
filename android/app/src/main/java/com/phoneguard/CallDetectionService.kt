@@ -7,7 +7,6 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
 import android.util.Log
 import android.app.Service
@@ -18,8 +17,8 @@ import java.util.concurrent.Executors
  * 常驻通知，让老人能看到防护还在，也让进程尽量不被系统立刻杀掉。
  *
  * 真正在进程被杀之后仍能拦截的是 [PhoneGuardCallScreeningService]。
- * 这里的电话状态广播只在没有来电过滤角色时备用挂断。角色已经在拒接时再
- * endCall，会把同一通来电再记一条未接。
+ * 电话状态广播里包含通讯录来电。不读通讯录就分不清亲友，所以这里不挂断。
+ * 挂断只发生在来电过滤里；系统不会把已存联系人送进去。
  *
  * 类型用 specialUse，不用 dataSync。dataSync 在 Android 15 上最长大约只能跑数小时，
  * 而且 Android 15 起不允许从开机广播拉起。
@@ -30,8 +29,6 @@ class CallDetectionService : Service() {
     }
 
     private var receiverRegistered = false
-    private var lastEndedKey = ""
-    private var lastEndedAt = 0L
 
     private val phoneStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -95,64 +92,9 @@ class CallDetectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun handleIncomingCall(number: String) {
-        if (!CallGuardPolicy.shouldEndCallFromPhoneState(GuardCapabilities.screeningRoleHeld(this))) {
-            Log.i(TAG, "screening already handling ${CallGuardPolicy.redact(number)}, skip endCall")
-            return
-        }
-        val key = CallGuardPolicy.normalizeNumber(number)
-        val now = System.currentTimeMillis()
-        synchronized(this) {
-            if (key.isNotEmpty() && key == lastEndedKey && now - lastEndedAt < DUPLICATE_WINDOW_MS) {
-                Log.i(TAG, "duplicate ringing ${CallGuardPolicy.redact(number)}, skip endCall")
-                return
-            }
-        }
-        val block = try {
-            IncomingCallGuard.shouldBlock(this, number)
-        } catch (error: Exception) {
-            Log.e(TAG, "policy failed, allowing call", error)
-            false
-        }
-        if (!block) return
-        if (endCall()) {
-            synchronized(this) {
-                lastEndedKey = key
-                lastEndedAt = System.currentTimeMillis()
-            }
-            IncomingCallGuard.onBlocked(this, number)
-        } else {
-            Log.w(TAG, "endCall failed for ${CallGuardPolicy.redact(number)}")
-        }
-    }
-
-    private fun endCall(): Boolean {
-        return try {
-            val telecom = getSystemService(TELECOM_SERVICE) as TelecomManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && telecom.endCall()) {
-                true
-            } else {
-                endCallViaITelephony()
-            }
-        } catch (error: Exception) {
-            Log.e(TAG, "endCall error", error)
-            false
-        }
-    }
-
-    private fun endCallViaITelephony(): Boolean {
-        return try {
-            val telephony = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
-            val telephonyClass = Class.forName("android.telephony.TelephonyManager")
-            val getITelephony = telephonyClass.getDeclaredMethod("getITelephony")
-            getITelephony.isAccessible = true
-            val binder = getITelephony.invoke(telephony) ?: return false
-            val endCall = binder.javaClass.getMethod("endCall")
-            endCall.invoke(binder)
-            true
-        } catch (error: Exception) {
-            Log.e(TAG, "ITelephony endCall failed", error)
-            false
-        }
+        // 这条广播包含通讯录来电。不申请 READ_CONTACTS，就不能在这里区分亲友。
+        // 挂断只交给来电过滤；系统不会把已存联系人送进 onScreenCall。
+        Log.i(TAG, "phone state ringing ${CallGuardPolicy.redact(number)}; screening service decides")
     }
 
     private fun promoteToForeground() {
@@ -206,7 +148,6 @@ class CallDetectionService : Service() {
 
     companion object {
         private const val TAG = "PhoneGuard"
-        private const val DUPLICATE_WINDOW_MS = 15_000L
         const val ACTION_STOP = "com.phoneguard.ACTION_STOP"
         const val ACTION_REFRESH = "com.phoneguard.ACTION_REFRESH"
 

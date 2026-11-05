@@ -27,9 +27,6 @@ export function describeProtection(status: ProtectionStatus): ProtectionView {
   if (!status.localProvince.trim()) {
     blockers.push('请先填写家乡，例如：广西。不填就分不清本地和外地。');
   }
-  if (!status.contactsPermissionGranted) {
-    blockers.push('请允许读取通讯录。不允许的话，为了不拦错亲友，外地电话也不会拦。');
-  }
 
   if (status.sdkInt >= 29) {
     if (!status.screeningRoleAvailable) {
@@ -38,12 +35,9 @@ export function describeProtection(status: ProtectionStatus): ProtectionView {
       blockers.push('请允许「来电过滤」。这是退出应用后还能拦住电话的关键。');
     }
   } else if (status.sdkInt > 0) {
-    if (!status.phonePermissionGranted) {
-      blockers.push('请允许电话权限，用来识别来电。');
-    }
-    if (!status.serviceRunning) {
-      blockers.push('这台手机系统较旧，防护服务没有在运行。请再点一次「打开防护」。');
-    }
+    blockers.push(
+      '这台手机系统较旧，没有来电过滤。已存进通讯录的人不能被误挂，所以这里不会自动挂断。',
+    );
   }
 
   if (!status.batteryUnrestricted) {
@@ -71,7 +65,7 @@ export function describeProtection(status: ProtectionStatus): ProtectionView {
     return {
       tone: 'warn',
       title: '防护还没准备好',
-      detail: '下面几项没做完之前，退到后台可能拦不住，也可能把亲友拦住。',
+      detail: '下面几项没做完之前，退到后台可能拦不住外地陌生电话。已存进手机通讯录的人会打进来。',
       blockers,
       tips,
     };
@@ -81,8 +75,8 @@ export function describeProtection(status: ProtectionStatus): ProtectionView {
     tone: 'on',
     title: '防护开着',
     detail: status.autoBlock
-      ? '外地、又不在通讯录里的电话会被拦住。本地电话会打进来。通讯录里的人，哪怕是外地，也会打进来。可以回到桌面。'
-      : '外地拦截关着。只有黑名单里的号码会被拦住。',
+      ? '已存进手机通讯录的人会打进来。没存的外地号请加白名单。和家乡同省、同城的电话会放行，座机也按区号算。可以回到桌面。'
+      : '外地拦截关着。只有黑名单里的号码会被拦住。已存进手机通讯录的人会打进来。',
     blockers,
     tips,
   };

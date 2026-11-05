@@ -381,7 +381,7 @@ const HomeScreen: React.FC = () => {
         <Text style={styles.sectionBody}>
           {settings.whitelist.length > 0
             ? `额外放行 ${settings.whitelist.length} 个号码：${settings.whitelist.slice(0, 20).join('、')}`
-            : '通讯录里的人一直会打进来。'}
+            : '已存进手机通讯录的人会打进来。没存的外地号请加白名单。'}
         </Text>
         {settings.batteryPromptDismissed ? (
           <Text style={styles.sectionBody}>你选择了稍后允许后台运行。</Text>
@@ -393,7 +393,9 @@ const HomeScreen: React.FC = () => {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>您的家乡</Text>
-        <Text style={styles.sectionBody}>本地电话会打进来。外地、又不在通讯录里的电话会被拦住。</Text>
+        <Text style={styles.sectionBody}>
+          和家乡同省、同城的电话会放行，座机也按区号算。已存进手机通讯录的人会打进来。没存的外地号请加白名单。
+        </Text>
         <TextInput
           style={styles.input}
           placeholder="例如：广西"
@@ -433,7 +435,9 @@ const HomeScreen: React.FC = () => {
             accessibilityLabel="拦截外地陌生电话"
           />
         </View>
-        <Text style={styles.sectionBody}>关掉后，只拦截黑名单。通讯录和本地电话一直会打进来。</Text>
+        <Text style={styles.sectionBody}>
+          关掉后，只拦截黑名单。已存进手机通讯录的人会打进来。同省电话也会放行。
+        </Text>
       </View>
 
       <View style={styles.section}>

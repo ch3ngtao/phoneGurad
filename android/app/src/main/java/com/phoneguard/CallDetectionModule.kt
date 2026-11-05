@@ -117,9 +117,7 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) :
                         true
                     },
                 )
-                putBoolean("hasContactsPermission", hasPermission(Manifest.permission.READ_CONTACTS))
-                putBoolean("allGranted", GuardCapabilities.phonePermissionGranted(reactContext) &&
-                    GuardCapabilities.contactsPermissionGranted(reactContext))
+                putBoolean("allGranted", GuardCapabilities.phonePermissionGranted(reactContext))
             }
             promise.resolve(permissions)
         } catch (error: Exception) {
@@ -129,8 +127,7 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun requestPermissions(promise: Promise) {
-        promise.resolve(GuardCapabilities.phonePermissionGranted(reactContext) &&
-            GuardCapabilities.contactsPermissionGranted(reactContext))
+        promise.resolve(GuardCapabilities.phonePermissionGranted(reactContext))
     }
 
     @ReactMethod
@@ -215,7 +212,6 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) :
                 putBoolean("screeningRoleAvailable", GuardCapabilities.screeningRoleAvailable(reactContext))
                 putBoolean("batteryUnrestricted", GuardCapabilities.batteryUnrestricted(reactContext))
                 putBoolean("notificationsEnabled", GuardCapabilities.notificationsEnabled(reactContext))
-                putBoolean("contactsPermissionGranted", GuardCapabilities.contactsPermissionGranted(reactContext))
                 putBoolean("phonePermissionGranted", GuardCapabilities.phonePermissionGranted(reactContext))
                 putString("localProvince", settings.localProvince)
                 putBoolean("autoBlock", settings.autoBlock)

@@ -36,10 +36,6 @@ object GuardCapabilities {
         return true
     }
 
-    fun contactsPermissionGranted(context: Context): Boolean {
-        return hasPermission(context, Manifest.permission.READ_CONTACTS)
-    }
-
     fun phonePermissionGranted(context: Context): Boolean {
         val phoneState = hasPermission(context, Manifest.permission.READ_PHONE_STATE)
         val answer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

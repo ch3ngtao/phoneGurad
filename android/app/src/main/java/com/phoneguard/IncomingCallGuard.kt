@@ -5,7 +5,8 @@ import android.content.Intent
 import android.util.Log
 
 /**
- * 原生拦截入口。来电筛选和电话状态监听都走这里，不经过 React Native。
+ * 原生拦截入口。只给来电过滤用，不经过 React Native，也不查通讯录。
+ * 已存联系人由系统直接放行，不会进入 onScreenCall。
  */
 object IncomingCallGuard {
     private const val TAG = "PhoneGuard"
@@ -27,20 +28,6 @@ object IncomingCallGuard {
             PhoneLookupService.LocationResult.UNKNOWN
         }
 
-        val contactsGranted = GuardCapabilities.contactsPermissionGranted(context)
-        var contactsReadable = contactsGranted
-        val inContacts = if (contactsGranted) {
-            try {
-                ContactsMatcher.contains(context, rawNumber)
-            } catch (error: Exception) {
-                Log.e(TAG, "contacts unreadable, fail open", error)
-                contactsReadable = false
-                false
-            }
-        } else {
-            false
-        }
-
         val decision = CallGuardPolicy.decide(
             CallGuardPolicy.Facts(
                 normalizedNumber = normalized,
@@ -50,8 +37,6 @@ object IncomingCallGuard {
                 numberProvince = location.province,
                 numberCity = location.city,
                 locationKnown = location.isKnown,
-                inContacts = inContacts,
-                contactsReadable = contactsReadable,
                 inWhitelist = CallGuardPolicy.matchesList(settings.whitelist, rawNumber),
                 inBlacklist = CallGuardPolicy.matchesList(settings.blacklist, rawNumber),
             ),
@@ -60,7 +45,7 @@ object IncomingCallGuard {
             TAG,
             "incoming ${CallGuardPolicy.redact(rawNumber)} " +
                 "known=${location.isKnown} province=${location.province} city=${location.city} " +
-                "contacts=$inContacts decision=$decision",
+                "carrier=${location.carrier} decision=$decision",
         )
         return decision == CallGuardPolicy.Decision.BLOCK
     }

@@ -13,8 +13,8 @@
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
     <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
-    <!-- 通讯录权限（用于白名单放行） -->
-    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- 不申请 READ_CONTACTS。系统因此不会把通讯录来电交给来电过滤，亲友直接打进来。 -->
 
     <!-- 通知权限 (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />

@@ -102,15 +102,12 @@ object GuardNotifier {
         ) {
             return "请允许来电过滤，否则退出后拦不住。"
         }
-        if (!GuardCapabilities.contactsPermissionGranted(context)) {
-            return "请允许读取通讯录。否则为了不拦错亲友，暂时不会拦截。"
-        }
         val blocked = if (settings.blockedCount > 0) {
             "已经拦住 ${settings.blockedCount} 个。"
         } else {
             "还没有拦住电话。"
         }
-        return "外地陌生电话会被拦住。本地和通讯录会打进来。$blocked"
+        return "没存进通讯录的外地号会被拦住。已存的人，以及同省电话，会打进来。座机按区号算。$blocked"
     }
 
     private fun openAppIntent(context: Context): PendingIntent {

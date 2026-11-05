@@ -9,7 +9,6 @@ function status(partial: Partial<ProtectionStatus> = {}): ProtectionStatus {
     screeningRoleAvailable: true,
     batteryUnrestricted: true,
     notificationsEnabled: true,
-    contactsPermissionGranted: true,
     phonePermissionGranted: true,
     localProvince: '广西',
     autoBlock: true,
@@ -44,15 +43,20 @@ test('条件齐了就告诉老人可以回到桌面', () => {
   const view = describeProtection(status());
   expect(view.tone).toBe('on');
   expect(view.title).toBe('防护开着');
-  expect(view.detail).toContain('通讯录');
-  expect(view.detail).toContain('本地');
+  expect(view.detail).toContain('已存进手机通讯录的人会打进来');
+  expect(view.detail).toContain('没存的外地号请加白名单');
+  expect(view.detail).toContain('同省');
+  expect(view.detail).toContain('座机也按区号算');
+  expect(view.detail).not.toContain('读取通讯录');
   expect(view.blockers).toEqual([]);
 });
 
-test('没填家乡、没通讯录或没来电过滤时不能算准备好', () => {
+test('没填家乡或没来电过滤时不能算准备好，但不再要求读取通讯录', () => {
   expect(describeProtection(status({ localProvince: '  ' })).tone).toBe('warn');
-  expect(describeProtection(status({ contactsPermissionGranted: false })).tone).toBe('warn');
-  expect(describeProtection(status({ screeningRoleHeld: false })).blockers[0]).toContain('来电过滤');
+  const missingRole = describeProtection(status({ screeningRoleHeld: false }));
+  expect(missingRole.blockers[0]).toContain('来电过滤');
+  expect(missingRole.blockers.join('')).not.toContain('读取通讯录');
+  expect(missingRole.detail).toContain('已存进手机通讯录的人会打进来');
 });
 
 test('来电过滤还在但常驻通知没了，仍然算开着并给出引导', () => {
@@ -65,4 +69,6 @@ test('旧系统必须看到防护服务还在跑', () => {
   const view = describeProtection(status({ sdkInt: 28, serviceRunning: false, screeningRoleHeld: false }));
   expect(view.tone).toBe('warn');
   expect(view.blockers.join('')).toContain('系统较旧');
+  expect(view.blockers.join('')).toContain('不会自动挂断');
+  expect(view.blockers.join('')).not.toContain('读取通讯录');
 });

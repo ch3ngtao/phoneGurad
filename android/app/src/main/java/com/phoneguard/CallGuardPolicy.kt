@@ -3,13 +3,17 @@ package com.phoneguard
 /**
  * 来电是否拦截的纯规则。不依赖 Android 框架，便于单测。
  *
+ * 通讯录来电不会进入这里：应用不申请 READ_CONTACTS，
+ * 系统不会把已存联系人（含外地亲友和座机）交给来电过滤。
+ * 这里只处理筛到的陌生号。
+ *
  * 规则：
  * 1. 防护没开、号码为空、归属地未知、还没填家乡 → 放行
  * 2. 黑名单 → 拦截
- * 3. 白名单或通讯录 → 放行
- * 4. 读不到通讯录 → 放行（避免把外地亲友拦掉）
- * 5. 家乡相同（省或市）→ 放行
- * 6. 其余外地号码，在开启「拦截外地」时拦截
+ * 3. 白名单 → 放行
+ * 4. 「拦截外地」关着 → 放行
+ * 5. 和家乡同省或同城 → 放行。座机归属来自区号，未知区号算归属地未知，放行
+ * 6. 其余外地陌生号，在开启「拦截外地」时拦截
  */
 object CallGuardPolicy {
 
@@ -26,8 +30,6 @@ object CallGuardPolicy {
         val numberProvince: String,
         val numberCity: String,
         val locationKnown: Boolean,
-        val inContacts: Boolean,
-        val contactsReadable: Boolean,
         val inWhitelist: Boolean,
         val inBlacklist: Boolean,
     )
@@ -36,9 +38,8 @@ object CallGuardPolicy {
         if (!facts.protectionEnabled) return Decision.ALLOW
         if (facts.normalizedNumber.isEmpty()) return Decision.ALLOW
         if (facts.inBlacklist) return Decision.BLOCK
-        if (facts.inWhitelist || facts.inContacts) return Decision.ALLOW
+        if (facts.inWhitelist) return Decision.ALLOW
         if (!facts.autoBlock) return Decision.ALLOW
-        if (!facts.contactsReadable) return Decision.ALLOW
         if (normalizeRegion(facts.localRegion).isEmpty()) return Decision.ALLOW
         if (!facts.locationKnown) return Decision.ALLOW
         if (isLocalRegion(facts.localRegion, facts.numberProvince, facts.numberCity)) {

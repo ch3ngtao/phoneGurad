@@ -12,6 +12,9 @@ import java.util.zip.CRC32
  *
  * Reads phone2region.db and landline_area_codes.json from Android assets.
  * Supports both mobile (11-digit) and landline (area code + local number) lookups.
+ * Landlines starting with 0 use landline_area_codes.json. Same province or city as
+ * the saved hometown is allowed by CallGuardPolicy. An unknown area code stays unknown
+ * and is allowed, so an unrecognized landline is not blocked.
  */
 class PhoneLookupService(assets: AssetManager) {
 
@@ -118,8 +121,8 @@ class PhoneLookupService(assets: AssetManager) {
     }
 
     /**
-     * Query landline number location by area code.
-     * Tries 4-digit area code first, then 3-digit.
+     * 座机按区号查归属。先看 4 位（如 0755），再看 3 位（如 010、0771）。
+     * 区号不在表里就返回未知，拦截规则会放行。
      */
     private fun queryLandlineLocation(phone: String): LocationResult {
         if (landlineCodes.isEmpty()) return LocationResult.UNKNOWN

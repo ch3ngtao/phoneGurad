@@ -21,7 +21,6 @@ export type PermissionStatus = {
   hasPhoneStatePermission: boolean;
   hasCallLogPermission: boolean;
   hasAnswerPhonePermission: boolean;
-  hasContactsPermission: boolean;
   allGranted: boolean;
 };
 
@@ -39,7 +38,6 @@ export type ProtectionStatus = {
   screeningRoleAvailable: boolean;
   batteryUnrestricted: boolean;
   notificationsEnabled: boolean;
-  contactsPermissionGranted: boolean;
   phonePermissionGranted: boolean;
   localProvince: string;
   autoBlock: boolean;
@@ -68,7 +66,6 @@ export const EMPTY_PROTECTION_STATUS: ProtectionStatus = {
   screeningRoleAvailable: false,
   batteryUnrestricted: false,
   notificationsEnabled: false,
-  contactsPermissionGranted: false,
   phonePermissionGranted: false,
   localProvince: '',
   autoBlock: true,
@@ -93,7 +90,6 @@ export const EMPTY_PROTECTION_STATUS: ProtectionStatus = {
 const ANDROID_PERMISSIONS = [
   PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
   PermissionsAndroid.PERMISSIONS.READ_CALL_LOG,
-  PermissionsAndroid.PERMISSIONS.READ_CONTACTS,
   PermissionsAndroid.PERMISSIONS.ANSWER_PHONE_CALLS,
   PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
 ];
@@ -120,7 +116,6 @@ class CallDetection {
         hasPhoneStatePermission: false,
         hasCallLogPermission: false,
         hasAnswerPhonePermission: false,
-        hasContactsPermission: false,
         allGranted: false,
       };
     }
@@ -130,7 +125,7 @@ class CallDetection {
   async requestPermissions(): Promise<boolean> {
     await this.requestAndroidPermissions();
     const status = await this.getProtectionStatus();
-    return status.phonePermissionGranted && status.contactsPermissionGranted;
+    return status.phonePermissionGranted;
   }
 
   async requestAndroidPermissions(): Promise<void> {

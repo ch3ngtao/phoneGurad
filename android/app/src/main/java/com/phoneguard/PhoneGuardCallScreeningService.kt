@@ -7,8 +7,9 @@ import android.util.Log
 
 /**
  * 系统在来电时绑定此服务，即使界面已退出、进程刚被杀掉也会拉起。
- * 每次 onScreenCall 只 respondToCall 一次。挂断只走这里，不再调用 Telecom.endCall。
- * 失败时放行，避免误伤亲友。
+ * 不申请 READ_CONTACTS，所以已存进通讯录的来电（含外地亲友和座机）不会送到这里。
+ * 每次 onScreenCall 只 respondToCall 一次。挂断只走这里。
+ * 失败时放行。
  */
 class PhoneGuardCallScreeningService : CallScreeningService() {
     override fun onScreenCall(callDetails: Call.Details) {

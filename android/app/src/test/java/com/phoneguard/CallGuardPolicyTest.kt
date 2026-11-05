@@ -37,11 +37,11 @@ class CallGuardPolicyTest {
     }
 
     @Test
-    fun allowsContactEvenWhenNonLocal() {
+    fun screenedOutOfTownStrangerIsBlockedWithoutReadingContacts() {
         val decision = CallGuardPolicy.decide(
-            facts(numberProvince = "广东", numberCity = "广州", inContacts = true),
+            facts(numberProvince = "广东", numberCity = "广州"),
         )
-        assertEquals(CallGuardPolicy.Decision.ALLOW, decision)
+        assertEquals(CallGuardPolicy.Decision.BLOCK, decision)
     }
 
     @Test
@@ -57,14 +57,30 @@ class CallGuardPolicyTest {
     }
 
     @Test
-    fun failsOpenWhenContactsOrLocationAreUnknown() {
+    fun allowsSameProvinceOrUnknownLocationIncludingLandlines() {
         assertEquals(
             CallGuardPolicy.Decision.ALLOW,
-            CallGuardPolicy.decide(facts(contactsReadable = false, numberProvince = "广东")),
+            CallGuardPolicy.decide(facts(numberProvince = "广西", numberCity = "南宁")),
         )
         assertEquals(
             CallGuardPolicy.Decision.ALLOW,
-            CallGuardPolicy.decide(facts(locationKnown = false, numberProvince = "广东")),
+            CallGuardPolicy.decide(facts(localRegion = "南宁", numberProvince = "广西", numberCity = "南宁")),
+        )
+        assertEquals(
+            CallGuardPolicy.Decision.BLOCK,
+            CallGuardPolicy.decide(facts(numberProvince = "北京", numberCity = "北京")),
+        )
+        assertEquals(
+            CallGuardPolicy.Decision.ALLOW,
+            CallGuardPolicy.decide(facts(locationKnown = false, numberProvince = "未知", numberCity = "未知")),
+        )
+    }
+
+    @Test
+    fun allowsWhenProtectionOrHometownIsMissing() {
+        assertEquals(
+            CallGuardPolicy.Decision.ALLOW,
+            CallGuardPolicy.decide(facts(autoBlock = false, numberProvince = "广东", numberCity = "广州")),
         )
         assertEquals(
             CallGuardPolicy.Decision.ALLOW,
@@ -100,8 +116,6 @@ class CallGuardPolicyTest {
         numberProvince: String = "广西",
         numberCity: String = "南宁",
         locationKnown: Boolean = true,
-        inContacts: Boolean = false,
-        contactsReadable: Boolean = true,
         inWhitelist: Boolean = false,
         inBlacklist: Boolean = false,
     ): CallGuardPolicy.Facts {
@@ -113,8 +127,6 @@ class CallGuardPolicyTest {
             numberProvince = numberProvince,
             numberCity = numberCity,
             locationKnown = locationKnown,
-            inContacts = inContacts,
-            contactsReadable = contactsReadable,
             inWhitelist = inWhitelist,
             inBlacklist = inBlacklist,
         )
