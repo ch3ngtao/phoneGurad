@@ -20,16 +20,44 @@ class StorageService {
   /**
    * 获取应用设置
    */
-  async getSettings(): Promise<AppSettings> {
+  /**
+   * 读到设置返回对象；存储失败返回 null，避免用空名单覆盖原生配置。
+   */
+  async readSettings(): Promise<AppSettings | null> {
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (data) {
-        return JSON.parse(data);
+      if (!data) {
+        return null;
       }
+      const parsed = JSON.parse(data);
+      return this.cloneSettings({
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        localProvince:
+          typeof parsed.localProvince === 'string' ? parsed.localProvince : '',
+        whitelist: Array.isArray(parsed.whitelist) ? parsed.whitelist : [],
+        blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : [],
+        protectionEnabled: parsed.protectionEnabled === true,
+        batteryPromptDismissed: parsed.batteryPromptDismissed === true,
+        autostartOpened: parsed.autostartOpened === true,
+      });
     } catch (error) {
       console.error('[StorageService] Error getting settings:', error);
+      return null;
     }
-    return DEFAULT_SETTINGS;
+  }
+
+  async getSettings(): Promise<AppSettings> {
+    const stored = await this.readSettings();
+    return stored ?? this.cloneSettings(DEFAULT_SETTINGS);
+  }
+
+  private cloneSettings(settings: AppSettings): AppSettings {
+    return {
+      ...settings,
+      whitelist: [...(settings.whitelist ?? [])],
+      blacklist: [...(settings.blacklist ?? [])],
+    };
   }
 
   /**

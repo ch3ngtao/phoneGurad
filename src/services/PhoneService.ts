@@ -1,16 +1,10 @@
 import { PhoneMarkResult } from '../types';
+import CallDetection from '../native/modules/CallDetection';
 import locationService from './LocationService';
-import StorageService from './StorageService';
 
 /**
- * 电话检测服务
- * 负责判断来电是否为营销/骚扰电话
- *
- * 判定规则：
- * 1. 黑名单号码 → 直接拦截
- * 2. 白名单号码 → 不拦截
- * 3. 外地号码（非本省） → 标记为疑似营销号
- * 4. 未知归属地号码 → 可选择拦截或放行
+ * 电话检测服务。
+ * 后台是否拦截以原生 CallGuardPolicy 为准，不依赖界面是否还在前台。
  */
 class PhoneService {
   private static instance: PhoneService;
@@ -31,7 +25,6 @@ class PhoneService {
    * @returns 检测结果
    */
   async checkPhoneNumber(phoneNumber: string): Promise<PhoneMarkResult> {
-    const location = await locationService.queryLocation(phoneNumber);
     const isNonLocal = await locationService.isNonLocalNumber(phoneNumber);
 
     // 外地号码标记为疑似营销
@@ -55,26 +48,13 @@ class PhoneService {
    */
   async shouldBlockNumber(
     phoneNumber: string,
-    markResult: PhoneMarkResult,
+    _markResult?: PhoneMarkResult,
   ): Promise<boolean> {
-    const settings = await StorageService.getSettings();
-
-    // 黑名单直接拦截
-    if ((settings.blacklist ?? []).includes(phoneNumber)) {
-      return true;
-    }
-
-    // 白名单不拦截
-    if ((settings.whitelist ?? []).includes(phoneNumber)) {
+    try {
+      return await CallDetection.shouldBlockNumber(phoneNumber);
+    } catch {
       return false;
     }
-
-    // 根据标记结果判断
-    if (markResult.isSpam && settings.autoBlock) {
-      return true;
-    }
-
-    return false;
   }
 
   /**

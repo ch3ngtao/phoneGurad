@@ -36,6 +36,10 @@ export interface AppSettings {
   enableLog: boolean;
   whitelist: string[];
   blacklist: string[];
+  localProvince: string;
+  protectionEnabled: boolean;
+  batteryPromptDismissed: boolean;
+  autostartOpened: boolean;
 }
 
 // 原生电话模块事件

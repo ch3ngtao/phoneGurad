@@ -1,264 +1,206 @@
 package com.phoneguard
 
 import android.Manifest
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.SharedPreferences
-import android.database.Cursor
-import android.net.Uri
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.provider.ContactsContract
-import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
 import android.util.Log
-import androidx.core.app.NotificationCompat
+import android.app.Service
+import android.content.BroadcastReceiver
+import java.util.concurrent.Executors
 
 /**
- * 来电检测前台服务
+ * 常驻通知，让老人能看到防护还在，也让进程尽量不被系统立刻杀掉。
  *
- * 使用前台服务保证应用在后台时也能检测来电并执行拦截。
- * 服务通过 BroadcastReceiver 监听 PHONE_STATE_CHANGED，
- * 在收到来电事件后使用 PhoneLookupService 判断归属地并执行拦截。
+ * 真正在进程被杀之后仍能拦截的是 [PhoneGuardCallScreeningService]。
+ * 电话状态广播里包含通讯录来电。不读通讯录就分不清亲友，所以这里不挂断。
+ * 挂断只发生在来电过滤里；系统不会把已存联系人送进去。
+ *
+ * 类型用 specialUse，不用 dataSync。dataSync 在 Android 15 上最长大约只能跑数小时，
+ * 而且 Android 15 起不允许从开机广播拉起。
  */
 class CallDetectionService : Service() {
+    private val worker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "phoneguard-call").apply { isDaemon = true }
+    }
+
+    private var receiverRegistered = false
 
     private val phoneStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) return
             val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
-            val incomingNumber = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER) ?: ""
-
-            when (state) {
-                TelephonyManager.EXTRA_STATE_RINGING -> {
-                    handleIncomingCall(incomingNumber)
-                }
+            if (state != TelephonyManager.EXTRA_STATE_RINGING) return
+            val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER).orEmpty()
+            if (number.isBlank()) {
+                Log.i(TAG, "ringing without number; screening service handles modern Android")
+                return
             }
+            worker.execute { handleIncomingCall(number) }
         }
     }
 
-    private var telecomManager: TelecomManager? = null
-    private var telephonyManager: TelephonyManager? = null
-    private var phoneLookupService: PhoneLookupService? = null
-    private lateinit var prefs: SharedPreferences
-
     override fun onCreate() {
         super.onCreate()
-        telecomManager = getSystemService(TELECOM_SERVICE) as TelecomManager
-        telephonyManager = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
-        phoneLookupService = PhoneLookupService.getInstance(assets)
-        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        promoteToForeground()
+        ensurePhoneStateReceiver()
+        runningFlag = true
+        CallGuardStore.setLastServiceError(this, "")
+        Log.i(TAG, "guard service started")
+    }
 
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                shutdown()
+                return START_NOT_STICKY
+            }
+            ACTION_REFRESH -> {
+                promoteToForeground()
+                return START_STICKY
+            }
+        }
+        if (!CallGuardStore.isProtectionEnabled(this)) {
+            shutdown()
+            return START_NOT_STICKY
+        }
+        promoteToForeground()
+        ensurePhoneStateReceiver()
+        runningFlag = true
+        return START_STICKY
+    }
 
-        val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-        registerReceiver(phoneStateReceiver, filter)
-
-        Log.i(TAG, "CallDetectionService started")
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (CallGuardStore.isProtectionEnabled(this)) {
+            start(this)
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
+        runningFlag = false
+        unregisterPhoneReceiver()
+        worker.shutdownNow()
+        super.onDestroy()
+        Log.i(TAG, "guard service destroyed")
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun handleIncomingCall(number: String) {
+        // 这条广播包含通讯录来电。不申请 READ_CONTACTS，就不能在这里区分亲友。
+        // 挂断只交给来电过滤；系统不会把已存联系人送进 onScreenCall。
+        Log.i(TAG, "phone state ringing ${CallGuardPolicy.redact(number)}; screening service decides")
+    }
+
+    private fun promoteToForeground() {
+        val notification = GuardNotifier.buildOngoing(this)
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(
+                GuardNotifier.ONGOING_NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            startForeground(GuardNotifier.ONGOING_NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun ensurePhoneStateReceiver() {
+        if (receiverRegistered) return
+        if (!GuardCapabilities.hasPermission(this, Manifest.permission.READ_PHONE_STATE)) {
+            Log.w(TAG, "phone permission missing, skip phone state receiver")
+            return
+        }
+        try {
+            val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(phoneStateReceiver, filter, RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(phoneStateReceiver, filter)
+            }
+            receiverRegistered = true
+        } catch (error: Exception) {
+            Log.e(TAG, "register phone state failed", error)
+        }
+    }
+
+    private fun unregisterPhoneReceiver() {
+        if (!receiverRegistered) return
         try {
             unregisterReceiver(phoneStateReceiver)
         } catch (_: Exception) {
             // already unregistered
         }
-        super.onDestroy()
-        Log.i(TAG, "CallDetectionService destroyed")
+        receiverRegistered = false
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Handle action for stopping
-        if (intent?.action == ACTION_STOP) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        return START_STICKY
-    }
-
-    /**
-     * Handle incoming call: check settings and block if needed.
-     */
-    private fun handleIncomingCall(phoneNumber: String) {
-        Log.i(TAG, "Incoming call: $phoneNumber")
-
-        val localProvince = prefs.getString(KEY_LOCAL_PROVINCE, null)
-        if (localProvince.isNullOrEmpty()) {
-            Log.i(TAG, "No local province set, skipping block")
-            return
-        }
-
-        val autoBlock = prefs.getBoolean(KEY_AUTO_BLOCK, false)
-        val whitelist = prefs.getStringSet(KEY_WHITELIST, emptySet()) ?: emptySet()
-        val blacklist = prefs.getStringSet(KEY_BLACKLIST, emptySet()) ?: emptySet()
-
-        // Blacklist: always block
-        if (blacklist.contains(phoneNumber)) {
-            Log.i(TAG, "Blacklisted number, blocking: $phoneNumber")
-            endCall()
-            return
-        }
-
-        // Whitelist: never block
-        if (whitelist.contains(phoneNumber)) {
-            Log.i(TAG, "Whitelisted number, skipping: $phoneNumber")
-            return
-        }
-
-        // Contacts whitelist: never block
-        if (isNumberInContacts(phoneNumber)) {
-            Log.i(TAG, "Number in contacts, skipping: $phoneNumber")
-            return
-        }
-
-        // Auto-block non-local numbers
-        if (autoBlock && phoneLookupService != null) {
-            val location = phoneLookupService!!.queryLocation(phoneNumber)
-            if (location.isKnown && location.province != localProvince) {
-                Log.i(TAG, "Non-local number (${location.province}), blocking: $phoneNumber")
-                endCall()
-                return
-            }
-        }
-    }
-
-    /**
-     * Check if the phone number exists in contacts.
-     * Matches by last 10 digits to handle different formatting (+86, 0 prefix, etc).
-     */
-    private fun isNumberInContacts(phoneNumber: String): Boolean {
-        if (!hasPermission(Manifest.permission.READ_CONTACTS)) {
-            return false
-        }
-
-        try {
-            val cleaned = phoneNumber.replace(Regex("[^0-9]"), "")
-            if (cleaned.length < 7) return false
-
-            // Take last 10 digits for matching (handles +86 prefix differences)
-            val suffix = cleaned.takeLast(10)
-
-            // Query all contacts and match by suffix
-            val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
-            val cursor: Cursor? = contentResolver.query(
-                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                projection,
-                null, null, null
-            )
-            cursor?.use {
-                while (it.moveToNext()) {
-                    val stored = it.getString(0)?.replace(Regex("[^0-9]"), "") ?: continue
-                    if (stored.length >= 10 && stored.takeLast(10) == suffix) {
-                        return true
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking contacts", e)
-        }
-        return false
-    }
-
-    private fun hasPermission(permission: String): Boolean {
-        return android.content.pm.PackageManager.PERMISSION_GRANTED ==
-            checkSelfPermission(permission)
-    }
-
-    /**
-     * End the current call.
-     */
-    private fun endCall() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val result = telecomManager?.endCall()
-                if (result == true) {
-                    Log.i(TAG, "Call ended via TelecomManager")
-                    return
-                }
-                // Fallback: ITelephony reflection
-                if (tryEndCallViaITelephony()) {
-                    Log.i(TAG, "Call ended via ITelephony")
-                    return
-                }
-            }
-            Log.w(TAG, "Failed to end call")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error ending call", e)
-        }
-    }
-
-    /**
-     * Use ITelephony reflection to end call.
-     */
-    private fun tryEndCallViaITelephony(): Boolean {
-        return try {
-            val telephonyClass = Class.forName("android.telephony.TelephonyManager")
-            val getTelecomMethod = telephonyClass.getDeclaredMethod("getITelephony")
-            getTelecomMethod.isAccessible = true
-            val telephony = getTelecomMethod.invoke(telephonyManager)
-            val endCallMethod = telephony?.javaClass?.getMethod("endCall")
-            endCallMethod?.invoke(telephony)
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "ITelephony fallback failed", e)
-            false
-        }
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "来电检测服务",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "PhoneGuard 来电检测服务，用于在后台监控和拦截骚扰电话"
-            }
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
-        }
-    }
-
-    private fun buildNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("PhoneGuard 正在运行")
-            .setContentText("正在监控来电...")
-            .setSmallIcon(android.R.drawable.ic_menu_call)
-            .setOngoing(true)
-            .build()
+    private fun shutdown() {
+        runningFlag = false
+        unregisterPhoneReceiver()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     companion object {
-        private const val TAG = "CallDetectionService"
-        private const val CHANNEL_ID = "call_detection_channel"
-        private const val NOTIFICATION_ID = 1001
-        private const val PREFS_NAME = "phoneguard_prefs"
-
-        const val ACTION_START = "com.phoneguard.ACTION_START"
+        private const val TAG = "PhoneGuard"
         const val ACTION_STOP = "com.phoneguard.ACTION_STOP"
+        const val ACTION_REFRESH = "com.phoneguard.ACTION_REFRESH"
 
-        const val KEY_LOCAL_PROVINCE = "local_province"
-        const val KEY_AUTO_BLOCK = "auto_block"
-        const val KEY_WHITELIST = "whitelist"
-        const val KEY_BLACKLIST = "blacklist"
+        @Volatile
+        private var runningFlag = false
 
-        fun buildStartIntent(context: Context): Intent {
-            return Intent(context, CallDetectionService::class.java).apply {
-                action = ACTION_START
+        fun isRunning(): Boolean = runningFlag
+
+        fun startIfEnabled(context: Context) {
+            if (!CallGuardStore.isProtectionEnabled(context)) return
+            start(context)
+        }
+
+        fun start(context: Context) {
+            val appContext = context.applicationContext
+            val intent = Intent(appContext, CallDetectionService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    appContext.startForegroundService(intent)
+                } else {
+                    appContext.startService(intent)
+                }
+            } catch (error: Exception) {
+                Log.e(TAG, "start failed", error)
+                CallGuardStore.setLastServiceError(appContext, GuardNotifier.userVisibleStartError(error))
             }
         }
 
-        fun buildStopIntent(context: Context): Intent {
-            return Intent(context, CallDetectionService::class.java).apply {
-                action = ACTION_STOP
+        fun stop(context: Context) {
+            val appContext = context.applicationContext
+            try {
+                if (!isRunning()) {
+                    appContext.stopService(Intent(appContext, CallDetectionService::class.java))
+                    return
+                }
+                val intent = Intent(appContext, CallDetectionService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                appContext.startService(intent)
+            } catch (error: Exception) {
+                Log.e(TAG, "stop failed", error)
+            }
+        }
+
+        fun refreshIfRunning(context: Context) {
+            if (!isRunning()) return
+            try {
+                val intent = Intent(context.applicationContext, CallDetectionService::class.java).apply {
+                    action = ACTION_REFRESH
+                }
+                context.applicationContext.startService(intent)
+            } catch (error: Exception) {
+                Log.w(TAG, "refresh failed", error)
             }
         }
     }

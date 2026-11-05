@@ -1,44 +1,21 @@
-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import { CallEvent } from '../../types';
 
 const { CallDetectionModule } = NativeModules;
 
-const EVENT_EMITTER = new NativeEventEmitter(CallDetectionModule);
-
-/**
- * 电话检测原生模块接口
- *
- * Android 需要以下权限:
- * - READ_PHONE_STATE
- * - READ_CALL_LOG
- * - ANSWER_PHONE_CALLS
- * - READ_PHONE_NUMBERS
- */
-export interface CallDetectionInterface {
-  // 开始监听来电
-  startListening(): Promise<void>;
-
-  // 停止监听
-  stopListening(): Promise<void>;
-
-  // 挂断电话
-  endCall(): Promise<void>;
-
-  // 拒接电话
-  rejectCall(): Promise<void>;
-
-  // 检查权限
-  checkPermissions(): Promise<PermissionStatus>;
-
-  // 请求权限
-  requestPermissions(): Promise<boolean>;
-
-  // 查询号码归属地
-  queryPhoneLocation(phoneNumber: string): Promise<PhoneLocationResult>;
-
-  // 监听来电事件
-  onCallEvent(callback: (event: CallEvent) => void): () => void;
+function createEmitter(): NativeEventEmitter | null {
+  if (Platform.OS !== 'android' || CallDetectionModule == null) {
+    return null;
+  }
+  try {
+    return new NativeEventEmitter(CallDetectionModule);
+  } catch (error) {
+    console.warn('[CallDetection] event emitter unavailable', error);
+    return null;
+  }
 }
+
+const EVENT_EMITTER = createEmitter();
 
 export type PermissionStatus = {
   hasPhoneStatePermission: boolean;
@@ -54,72 +31,87 @@ export type PhoneLocationResult = {
   isKnown: boolean;
 };
 
-class CallDetection implements CallDetectionInterface {
-  private isListening = false;
+export type ProtectionStatus = {
+  protectionEnabled: boolean;
+  serviceRunning: boolean;
+  screeningRoleHeld: boolean;
+  screeningRoleAvailable: boolean;
+  batteryUnrestricted: boolean;
+  notificationsEnabled: boolean;
+  phonePermissionGranted: boolean;
+  localProvince: string;
+  autoBlock: boolean;
+  whitelist: string[];
+  blacklist: string[];
+  enableNotification: boolean;
+  enableLog: boolean;
+  batteryPromptDismissed: boolean;
+  autostartOpened: boolean;
+  hasPersistedProvince: boolean;
+  hasPersistedLists: boolean;
+  hasPersistedAutoBlock: boolean;
+  hasPersistedProtection: boolean;
+  hasPersistedGuidance: boolean;
+  blockedCount: number;
+  lastBlockedNumber: string;
+  lastBlockedAt: number;
+  lastServiceError: string;
+  sdkInt: number;
+};
 
-  /**
-   * 开始监听来电
-   */
+export const EMPTY_PROTECTION_STATUS: ProtectionStatus = {
+  protectionEnabled: false,
+  serviceRunning: false,
+  screeningRoleHeld: false,
+  screeningRoleAvailable: false,
+  batteryUnrestricted: false,
+  notificationsEnabled: false,
+  phonePermissionGranted: false,
+  localProvince: '',
+  autoBlock: true,
+  whitelist: [],
+  blacklist: [],
+  enableNotification: true,
+  enableLog: true,
+  batteryPromptDismissed: false,
+  autostartOpened: false,
+  hasPersistedProvince: false,
+  hasPersistedLists: false,
+  hasPersistedAutoBlock: false,
+  hasPersistedProtection: false,
+  hasPersistedGuidance: false,
+  blockedCount: 0,
+  lastBlockedNumber: '',
+  lastBlockedAt: 0,
+  lastServiceError: '',
+  sdkInt: 0,
+};
+
+const ANDROID_PERMISSIONS = [
+  PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
+  PermissionsAndroid.PERMISSIONS.READ_CALL_LOG,
+  PermissionsAndroid.PERMISSIONS.ANSWER_PHONE_CALLS,
+  PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+];
+
+class CallDetection {
   async startListening(): Promise<void> {
-    if (Platform.OS !== 'android') {
-      console.warn('[CallDetection] Only supported on Android');
-      return;
-    }
-
-    const hasPermission = await this.requestPermissions();
-    if (!hasPermission) {
-      throw new Error('Permission denied');
-    }
-
+    if (!this.isAndroidModule()) return;
     await CallDetectionModule.startListening();
-    this.isListening = true;
-    console.log('[CallDetection] Started listening');
   }
 
-  /**
-   * 停止监听
-   */
   async stopListening(): Promise<void> {
-    if (Platform.OS !== 'android') {
-      return;
-    }
-
+    if (!this.isAndroidModule()) return;
     await CallDetectionModule.stopListening();
-    this.isListening = false;
-    console.log('[CallDetection] Stopped listening');
   }
 
-  /**
-   * 挂断当前通话
-   */
-  async endCall(): Promise<void> {
-    if (Platform.OS !== 'android') {
-      console.warn('[CallDetection] Only supported on Android');
-      return;
-    }
-
-    await CallDetectionModule.endCall();
-    console.log('[CallDetection] Call ended');
+  async shouldBlockNumber(phoneNumber: string): Promise<boolean> {
+    if (!this.isAndroidModule()) return false;
+    return CallDetectionModule.shouldBlockNumber(phoneNumber);
   }
 
-  /**
-   * 拒接来电
-   */
-  async rejectCall(): Promise<void> {
-    if (Platform.OS !== 'android') {
-      console.warn('[CallDetection] Only supported on Android');
-      return;
-    }
-
-    await CallDetectionModule.rejectCall();
-    console.log('[CallDetection] Call rejected');
-  }
-
-  /**
-   * 检查权限状态
-   */
   async checkPermissions(): Promise<PermissionStatus> {
-    if (Platform.OS !== 'android') {
+    if (!this.isAndroidModule()) {
       return {
         hasPhoneStatePermission: false,
         hasCallLogPermission: false,
@@ -127,26 +119,22 @@ class CallDetection implements CallDetectionInterface {
         allGranted: false,
       };
     }
-
-    return await CallDetectionModule.checkPermissions();
+    return CallDetectionModule.checkPermissions();
   }
 
-  /**
-   * 请求必要权限
-   */
   async requestPermissions(): Promise<boolean> {
-    if (Platform.OS !== 'android') {
-      return false;
-    }
-
-    return await CallDetectionModule.requestPermissions();
+    await this.requestAndroidPermissions();
+    const status = await this.getProtectionStatus();
+    return status.phonePermissionGranted;
   }
 
-  /**
-   * 查询号码归属地
-   */
+  async requestAndroidPermissions(): Promise<void> {
+    if (Platform.OS !== 'android') return;
+    await PermissionsAndroid.requestMultiple(ANDROID_PERMISSIONS);
+  }
+
   async queryPhoneLocation(phoneNumber: string): Promise<PhoneLocationResult> {
-    if (Platform.OS !== 'android') {
+    if (!this.isAndroidModule()) {
       return {
         province: '未知',
         city: '未知',
@@ -154,20 +142,42 @@ class CallDetection implements CallDetectionInterface {
         isKnown: false,
       };
     }
-    return await CallDetectionModule.queryPhoneLocation(phoneNumber);
+    return CallDetectionModule.queryPhoneLocation(phoneNumber);
   }
 
-  /**
-   * 同步设置到原生层（供前台服务读取）
-   */
+  async saveUserState(params: {
+    localProvince: string;
+    autoBlock: boolean;
+    protectionEnabled: boolean;
+    enableNotification: boolean;
+    enableLog: boolean;
+    batteryPromptDismissed: boolean;
+    autostartOpened: boolean;
+    whitelist: string[];
+    blacklist: string[];
+  }): Promise<void> {
+    if (!this.isAndroidModule()) return;
+    await CallDetectionModule.saveUserState(
+      params.localProvince,
+      params.autoBlock,
+      params.protectionEnabled,
+      params.enableNotification,
+      params.enableLog,
+      params.batteryPromptDismissed,
+      params.autostartOpened,
+      params.whitelist,
+      params.blacklist,
+    );
+  }
+
   async syncSettings(params: {
     localProvince: string;
     autoBlock: boolean;
     whitelist: string[];
     blacklist: string[];
   }): Promise<void> {
-    if (Platform.OS !== 'android') return;
-    CallDetectionModule.syncSettingsToNative(
+    if (!this.isAndroidModule()) return;
+    await CallDetectionModule.syncSettingsToNative(
       params.localProvince,
       params.autoBlock,
       params.whitelist,
@@ -175,22 +185,43 @@ class CallDetection implements CallDetectionInterface {
     );
   }
 
-  /**
-   * 监听来电事件
-   */
-  onCallEvent(callback: (event: CallEvent) => void): () => void {
-    const subscription = EVENT_EMITTER.addListener('onCallEvent', callback);
-
-    return () => {
-      subscription.remove();
+  async getProtectionStatus(): Promise<ProtectionStatus> {
+    if (!this.isAndroidModule()) return EMPTY_PROTECTION_STATUS;
+    const raw = await CallDetectionModule.getProtectionStatus();
+    return {
+      ...EMPTY_PROTECTION_STATUS,
+      ...raw,
+      whitelist: Array.isArray(raw?.whitelist) ? raw.whitelist : [],
+      blacklist: Array.isArray(raw?.blacklist) ? raw.blacklist : [],
     };
   }
 
-  /**
-   * 检查是否正在监听
-   */
-  getIsListening(): boolean {
-    return this.isListening;
+  async ensureScreeningRole(): Promise<boolean> {
+    const status = await this.getProtectionStatus();
+    if (status.sdkInt < 29 || !status.screeningRoleAvailable) return false;
+    if (status.screeningRoleHeld) return true;
+    if (!this.isAndroidModule()) return false;
+    return CallDetectionModule.requestCallScreeningRole();
+  }
+
+  async requestIgnoreBatteryOptimizations(): Promise<string> {
+    if (!this.isAndroidModule()) return 'failed';
+    return CallDetectionModule.requestIgnoreBatteryOptimizations();
+  }
+
+  async openAutoStartSettings(): Promise<string> {
+    if (!this.isAndroidModule()) return 'failed';
+    return CallDetectionModule.openAutoStartSettings();
+  }
+
+  onCallEvent(callback: (event: CallEvent) => void): () => void {
+    if (!EVENT_EMITTER) return () => undefined;
+    const subscription = EVENT_EMITTER.addListener('onCallEvent', callback);
+    return () => subscription.remove();
+  }
+
+  private isAndroidModule(): boolean {
+    return Platform.OS === 'android' && CallDetectionModule != null;
   }
 }
 

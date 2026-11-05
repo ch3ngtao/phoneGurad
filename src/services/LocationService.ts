@@ -14,8 +14,8 @@ export interface LocationInfo {
 /**
  * 归属地服务
  *
- * 使用 Android 原生 phone2region.db 进行归属地查询
- * 数据覆盖 500,000+ 号码段，精确到城市级别
+ * 使用 Android 原生 phone2region.db 进行归属地查询。
+ * localProvince 只是启动后从已保存设置填进来的缓存，真正记住的家乡在原生存储里。
  */
 class LocationService {
   private static instance: LocationService;

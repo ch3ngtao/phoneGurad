@@ -2,111 +2,90 @@ package com.phoneguard
 
 import android.Manifest
 import android.app.Activity
+import android.app.role.RoleManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
-import android.telecom.TelecomManager
-import android.telephony.TelephonyManager
 import android.util.Log
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.facebook.react.bridge.*
+import com.facebook.react.bridge.ActivityEventListener
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.BaseActivityEventListener
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
 /**
- * 电话检测原生模块
- *
- * 需要的 Android 权限:
- * - READ_PHONE_STATE: 读取电话状态
- * - READ_CALL_LOG: 读取通话记录
- * - ANSWER_PHONE_CALLS: 接听/挂断电话 (Android 8.0+)
+ * JS 只负责开关、权限和把设置写进原生存储。
+ * 来电判断和挂断不走这里，避免界面退出或脚本被回收后失效。
  */
-class CallDetectionModule(private val reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class CallDetectionModule(private val reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
 
     override fun getName(): String = "CallDetectionModule"
 
-    private var telecomManager: TelecomManager? = null
-    private var telephonyManager: TelephonyManager? = null
-    private var isListening = false
-    private val phoneLookupService: PhoneLookupService = PhoneLookupService.getInstance(reactContext.assets)
-    private val prefs = reactContext.getSharedPreferences("phoneguard_prefs", Context.MODE_PRIVATE)
+    private var rolePromise: Promise? = null
+    private var cleanedUp = false
+    private var blockReceiverRegistered = false
 
-    private val REQUIRED_PERMISSIONS = arrayOf(
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.READ_CALL_LOG,
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Manifest.permission.ANSWER_PHONE_CALLS
-        } else {
-            ""
-        },
-        Manifest.permission.CALL_PHONE,
-        Manifest.permission.READ_CONTACTS,
-    ).filter { it.isNotEmpty() }.toTypedArray()
+    private val activityListener: ActivityEventListener = object : BaseActivityEventListener() {
+        override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+            if (requestCode != REQUEST_CALL_SCREENING_ROLE) return
+            val granted = GuardCapabilities.screeningRoleHeld(reactContext)
+            rolePromise?.resolve(granted)
+            rolePromise = null
+        }
+    }
+
+    private val blockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != IncomingCallGuard.ACTION_CALL_BLOCKED) return
+            val params = Arguments.createMap().apply {
+                putString("eventType", "blocked")
+                putString("phoneNumber", intent.getStringExtra("number") ?: "")
+                putDouble("timestamp", intent.getLongExtra("at", 0L).toDouble())
+            }
+            sendEvent("onCallEvent", params)
+        }
+    }
+
+    init {
+        reactContext.addActivityEventListener(activityListener)
+        registerBlockReceiver()
+    }
 
     @ReactMethod
     fun startListening(promise: Promise) {
         try {
-            if (isListening) {
-                promise.resolve("Already listening")
-                return
-            }
-
-            telecomManager = reactContext.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-            telephonyManager = reactContext.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-
-            // Start the foreground service
-            val intent = CallDetectionService.buildStartIntent(reactContext)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                reactContext.startForegroundService(intent)
-            } else {
-                reactContext.startService(intent)
-            }
-
-            isListening = true
-            promise.resolve("Listening started")
-        } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
+            CallGuardStore.setProtectionEnabled(reactContext, true)
+            CallGuardStore.setLastServiceError(reactContext, "")
+            CallDetectionService.start(reactContext)
+            promise.resolve(true)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
         }
     }
 
     @ReactMethod
     fun stopListening(promise: Promise) {
         try {
-            val intent = CallDetectionService.buildStopIntent(reactContext)
-            reactContext.stopService(intent)
-            isListening = false
-            promise.resolve("Listening stopped")
-        } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
+            CallGuardStore.setProtectionEnabled(reactContext, false)
+            CallDetectionService.stop(reactContext)
+            promise.resolve(true)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
         }
     }
 
     @ReactMethod
     fun endCall(promise: Promise) {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                // Try TelecomManager.endCall first
-                val result = telecomManager?.endCall()
-                if (result == true) {
-                    promise.resolve("Call ended")
-                } else {
-                    // Fallback: try ITelephony via reflection
-                    val rejected = tryEndCallViaITelephony()
-                    if (rejected) {
-                        promise.resolve("Call ended (fallback)")
-                    } else {
-                        promise.reject(
-                            "ERROR",
-                            "无法挂断电话。Android 系统限制，需要将本应用设为默认电话应用才能自动拦截。"
-                        )
-                    }
-                }
-            } else {
-                promise.reject("ERROR", "需要 Android 9.0+ 才能挂断电话")
-            }
-        } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
-        }
+        promise.reject("ERROR", "挂断由系统来电过滤完成，界面不再直接挂断。")
     }
 
     @ReactMethod
@@ -114,21 +93,13 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) : R
         endCall(promise)
     }
 
-    /**
-     * Use ITelephony reflection to end call.
-     */
-    private fun tryEndCallViaITelephony(): Boolean {
-        return try {
-            val telephonyClass = Class.forName("android.telephony.TelephonyManager")
-            val getTelecomMethod = telephonyClass.getDeclaredMethod("getITelephony")
-            getTelecomMethod.isAccessible = true
-            val telephony = getTelecomMethod.invoke(telephonyManager)
-            val endCallMethod = telephony?.javaClass?.getMethod("endCall")
-            endCallMethod?.invoke(telephony)
-            true
-        } catch (e: Exception) {
-            Log.e("CallDetectionModule", "ITelephony fallback failed", e)
-            false
+    @ReactMethod
+    fun shouldBlockNumber(phoneNumber: String, promise: Promise) {
+        try {
+            promise.resolve(IncomingCallGuard.shouldBlock(reactContext, phoneNumber))
+        } catch (error: Exception) {
+            Log.e(TAG, "shouldBlock failed", error)
+            promise.resolve(false)
         }
     }
 
@@ -138,58 +109,32 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) : R
             val permissions = Arguments.createMap().apply {
                 putBoolean("hasPhoneStatePermission", hasPermission(Manifest.permission.READ_PHONE_STATE))
                 putBoolean("hasCallLogPermission", hasPermission(Manifest.permission.READ_CALL_LOG))
-                putBoolean("hasAnswerPhonePermission",
+                putBoolean(
+                    "hasAnswerPhonePermission",
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         hasPermission(Manifest.permission.ANSWER_PHONE_CALLS)
                     } else {
                         true
-                    }
+                    },
                 )
-                putBoolean("hasCallPhonePermission", hasPermission(Manifest.permission.CALL_PHONE))
-                putBoolean("hasContactsPermission", hasPermission(Manifest.permission.READ_CONTACTS))
+                putBoolean("allGranted", GuardCapabilities.phonePermissionGranted(reactContext))
             }
-
-            val allGranted = REQUIRED_PERMISSIONS.all { hasPermission(it) }
-            permissions.putBoolean("allGranted", allGranted)
-
             promise.resolve(permissions)
-        } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
         }
     }
 
     @ReactMethod
     fun requestPermissions(promise: Promise) {
-        try {
-            val currentActivity = reactContext.currentActivity
-            if (currentActivity == null) {
-                promise.reject("ERROR", "No current activity")
-                return
-            }
-
-            val missingPermissions = REQUIRED_PERMISSIONS.filter { !hasPermission(it) }
-
-            if (missingPermissions.isEmpty()) {
-                promise.resolve(true)
-                return
-            }
-
-            ActivityCompat.requestPermissions(
-                currentActivity,
-                missingPermissions.toTypedArray(),
-                1001
-            )
-
-            promise.resolve(false)
-        } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
-        }
+        promise.resolve(GuardCapabilities.phonePermissionGranted(reactContext))
     }
 
     @ReactMethod
     fun queryPhoneLocation(phoneNumber: String, promise: Promise) {
         try {
-            val result = phoneLookupService.queryLocation(phoneNumber)
+            val lookup = PhoneLookupService.getInstance(reactContext.assets)
+            val result = lookup.queryLocation(CallGuardPolicy.normalizeNumber(phoneNumber))
             val map = Arguments.createMap().apply {
                 putString("province", result.province)
                 putString("city", result.city)
@@ -197,8 +142,8 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) : R
                 putBoolean("isKnown", result.isKnown)
             }
             promise.resolve(map)
-        } catch (e: Exception) {
-            promise.reject("ERROR", e.message)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
         }
     }
 
@@ -208,33 +153,227 @@ class CallDetectionModule(private val reactContext: ReactApplicationContext) : R
         autoBlock: Boolean,
         whitelist: ReadableArray,
         blacklist: ReadableArray,
+        promise: Promise,
     ) {
         try {
-            prefs.edit().apply {
-                putString("local_province", localProvince)
-                putBoolean("auto_block", autoBlock)
-                val wl = whitelist.toArrayList().map { it.toString() }.toSet()
-                val bl = blacklist.toArrayList().map { it.toString() }.toSet()
-                putStringSet("whitelist", wl)
-                putStringSet("blacklist", bl)
-                apply()
-            }
-        } catch (e: Exception) {
-            Log.e("CallDetectionModule", "Failed to sync settings", e)
+            CallGuardStore.sync(
+                reactContext,
+                localProvince,
+                autoBlock,
+                whitelist.toStringList(),
+                blacklist.toStringList(),
+            )
+            promise.resolve(true)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
         }
+    }
+
+    @ReactMethod
+    fun saveUserState(
+        localProvince: String,
+        autoBlock: Boolean,
+        protectionEnabled: Boolean,
+        enableNotification: Boolean,
+        enableLog: Boolean,
+        batteryPromptDismissed: Boolean,
+        autostartOpened: Boolean,
+        whitelist: ReadableArray,
+        blacklist: ReadableArray,
+        promise: Promise,
+    ) {
+        try {
+            CallGuardStore.saveUserState(
+                reactContext,
+                localProvince,
+                autoBlock,
+                protectionEnabled,
+                enableNotification,
+                enableLog,
+                batteryPromptDismissed,
+                autostartOpened,
+                whitelist.toStringList(),
+                blacklist.toStringList(),
+            )
+            promise.resolve(true)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
+        }
+    }
+
+    @ReactMethod
+    fun getProtectionStatus(promise: Promise) {
+        try {
+            val settings = CallGuardStore.read(reactContext)
+            val map = Arguments.createMap().apply {
+                putBoolean("protectionEnabled", settings.protectionEnabled)
+                putBoolean("serviceRunning", CallDetectionService.isRunning())
+                putBoolean("screeningRoleHeld", GuardCapabilities.screeningRoleHeld(reactContext))
+                putBoolean("screeningRoleAvailable", GuardCapabilities.screeningRoleAvailable(reactContext))
+                putBoolean("batteryUnrestricted", GuardCapabilities.batteryUnrestricted(reactContext))
+                putBoolean("notificationsEnabled", GuardCapabilities.notificationsEnabled(reactContext))
+                putBoolean("phonePermissionGranted", GuardCapabilities.phonePermissionGranted(reactContext))
+                putString("localProvince", settings.localProvince)
+                putBoolean("autoBlock", settings.autoBlock)
+                putArray("whitelist", stringArray(settings.whitelist))
+                putArray("blacklist", stringArray(settings.blacklist))
+                putBoolean("enableNotification", settings.enableNotification)
+                putBoolean("enableLog", settings.enableLog)
+                putBoolean("batteryPromptDismissed", settings.batteryPromptDismissed)
+                putBoolean("autostartOpened", settings.autostartOpened)
+                putBoolean("hasPersistedProvince", settings.hasPersistedProvince)
+                putBoolean("hasPersistedLists", settings.hasPersistedLists)
+                putBoolean("hasPersistedAutoBlock", settings.hasPersistedAutoBlock)
+                putBoolean("hasPersistedProtection", settings.hasPersistedProtection)
+                putBoolean("hasPersistedGuidance", settings.hasPersistedGuidance)
+                putInt("blockedCount", settings.blockedCount)
+                putString("lastBlockedNumber", settings.lastBlockedNumber)
+                putDouble("lastBlockedAt", settings.lastBlockedAt.toDouble())
+                putString("lastServiceError", settings.lastServiceError)
+                putInt("sdkInt", Build.VERSION.SDK_INT)
+            }
+            promise.resolve(map)
+        } catch (error: Exception) {
+            promise.reject("ERROR", error.message)
+        }
+    }
+
+    @ReactMethod
+    fun requestCallScreeningRole(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                promise.resolve(false)
+                return
+            }
+            if (GuardCapabilities.screeningRoleHeld(reactContext)) {
+                promise.resolve(true)
+                return
+            }
+            val activity = reactContext.currentActivity
+            if (activity == null) {
+                promise.reject("NO_ACTIVITY", "请先打开应用")
+                return
+            }
+            val roleManager = activity.getSystemService(RoleManager::class.java)
+            if (roleManager == null || !roleManager.isRoleAvailable(RoleManager.ROLE_CALL_SCREENING)) {
+                promise.resolve(false)
+                return
+            }
+            rolePromise?.resolve(false)
+            rolePromise = promise
+            val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING)
+            activity.startActivityForResult(intent, REQUEST_CALL_SCREENING_ROLE)
+        } catch (error: Exception) {
+            rolePromise = null
+            promise.reject("ERROR", error.message)
+        }
+    }
+
+    @ReactMethod
+    fun requestIgnoreBatteryOptimizations(promise: Promise) {
+        val activity = reactContext.currentActivity
+        if (activity == null) {
+            promise.reject("NO_ACTIVITY", "请先打开应用")
+            return
+        }
+        if (GuardCapabilities.batteryUnrestricted(activity)) {
+            promise.resolve("already")
+            return
+        }
+        promise.resolve(OemSettings.requestIgnoreBatteryOptimizations(activity))
+    }
+
+    @ReactMethod
+    fun openAutoStartSettings(promise: Promise) {
+        val activity = reactContext.currentActivity
+        if (activity == null) {
+            promise.reject("NO_ACTIVITY", "请先打开应用")
+            return
+        }
+        promise.resolve(OemSettings.openAutoStart(activity))
+    }
+
+    @ReactMethod
+    fun addListener(eventName: String) {
+        // NativeEventEmitter 需要这两个方法存在。
+    }
+
+    @ReactMethod
+    fun removeListeners(count: Int) {
+        // NativeEventEmitter 需要这两个方法存在。
+    }
+
+    override fun invalidate() {
+        cleanup()
+        super.invalidate()
+    }
+
+    private fun cleanup() {
+        if (cleanedUp) return
+        cleanedUp = true
+        rolePromise?.resolve(false)
+        rolePromise = null
+        reactContext.removeActivityEventListener(activityListener)
+        unregisterBlockReceiver()
+    }
+
+    private fun registerBlockReceiver() {
+        if (blockReceiverRegistered) return
+        val filter = IntentFilter(IncomingCallGuard.ACTION_CALL_BLOCKED)
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                reactContext.registerReceiver(blockReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                reactContext.registerReceiver(blockReceiver, filter)
+            }
+            blockReceiverRegistered = true
+        } catch (error: Exception) {
+            Log.e(TAG, "register block receiver failed", error)
+        }
+    }
+
+    private fun unregisterBlockReceiver() {
+        if (!blockReceiverRegistered) return
+        try {
+            reactContext.unregisterReceiver(blockReceiver)
+        } catch (_: Exception) {
+            // already unregistered
+        }
+        blockReceiverRegistered = false
     }
 
     private fun hasPermission(permission: String): Boolean {
         return ContextCompat.checkSelfPermission(reactContext, permission) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun sendEvent(eventName: String, params: WritableMap) {
-        reactContext
-            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-            .emit(eventName, params)
+    private fun stringArray(values: Collection<String>): com.facebook.react.bridge.WritableArray {
+        val array = Arguments.createArray()
+        values.forEach { array.pushString(it) }
+        return array
     }
 
-    override fun onCatalystInstanceDestroy() {
-        isListening = false
+    private fun ReadableArray.toStringList(): List<String> {
+        val values = ArrayList<String>(size())
+        for (index in 0 until size()) {
+            val value = getString(index)
+            if (!value.isNullOrBlank()) values.add(value)
+        }
+        return values
+    }
+
+    private fun sendEvent(eventName: String, params: com.facebook.react.bridge.WritableMap) {
+        if (!reactContext.hasActiveReactInstance()) return
+        try {
+            reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                .emit(eventName, params)
+        } catch (error: Exception) {
+            Log.w(TAG, "send event failed", error)
+        }
+    }
+
+    companion object {
+        private const val TAG = "PhoneGuard"
+        private const val REQUEST_CALL_SCREENING_ROLE = 4101
     }
 }
